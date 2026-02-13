@@ -6,24 +6,27 @@ import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const router = useRouter()
-  const handleEmailSignIn = async () => {
+  const handleEmailAuth = async () => {
     try {
-      const { data, error } = await authClient.signIn.email({
-        email,
-        password,
-        callbackURL: "/dashboard",
-      });
-      if (error) {
-        alert(error.message);
-        return;
-      }
-      if (data?.url) router.push(data.url);
+        const { data, error } = await authClient.signUp.email({ 
+            email,
+            password,
+            name,
+            callbackURL: "/dashboard",
+        });
+        if (error) {
+            alert(error.message);
+            return;
+        }
+        router.push("/dashboard");
     } catch (err) {
       console.error("Email auth error:", err);
     }
   };
+
 
   const handleGoogleSignIn = async () => {
     await authClient.signIn.social({
@@ -58,6 +61,17 @@ export default function LoginPage() {
             className="w-full px-3 py-2 rounded-lg bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             placeholder="Enter your email"
           />
+          <label className="block text-gray-400 mb-1" htmlFor="name">
+            Name
+          </label>
+          <input
+            type="text"
+            id="name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg bg-gray-700 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder="Enter your name"
+          />
         </div>
         <div className="mb-6">
           <label className="block text-gray-400 mb-1" htmlFor="password">
@@ -73,7 +87,7 @@ export default function LoginPage() {
           />
         </div>
         <button
-          onClick={handleEmailSignIn}
+          onClick={handleEmailAuth}
           className="w-full bg-blue-600 hover:bg-blue-500 transition-colors py-2 rounded-lg mb-4"
         >
           Sign In with Email
