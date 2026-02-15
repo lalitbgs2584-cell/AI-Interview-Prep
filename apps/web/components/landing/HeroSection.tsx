@@ -12,7 +12,7 @@ export function HeroSection() {
 
       <div className="hero-anim-0" style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", background: "rgba(0,229,176,0.07)", border: "1px solid rgba(0,229,176,0.2)", color: "var(--accent)", fontFamily: "var(--ff-mono)", fontSize: "0.73rem", padding: "0.35rem 1rem", borderRadius: 100, marginBottom: "2rem", letterSpacing: "0.05em" }}>
         <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", animation: "dotPulse 2s infinite" }} />
-        Live AI Interview Simulation · Powered by GPT-o3
+        Live AI Interview Simulation 
       </div>
 
       <h1 className="hero-anim-1" style={{ fontFamily: "var(--ff-display)", fontSize: "clamp(3rem, 8.5vw, 7.5rem)", fontWeight: 800, letterSpacing: "-0.045em", lineHeight: 1, marginBottom: "1.5rem", maxWidth: 960 }}>

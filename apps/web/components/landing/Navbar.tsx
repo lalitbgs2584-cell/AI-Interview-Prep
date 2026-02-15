@@ -23,14 +23,12 @@ export function Navbar() {
       transition: "all 0.3s",
     }}>
       <a href="#" style={{ fontFamily: "var(--ff-display)", fontSize: "1.35rem", fontWeight: 800, letterSpacing: "-0.03em", color: "var(--text)", textDecoration: "none" }}>
-        Prep<span style={{ color: "var(--accent)" }}>AI</span>
+        Interview<span style={{ color: "var(--accent)" }}>AI</span>
       </a>
       <div className="nav-links-desktop" style={{ display: "flex", gap: "2.5rem", alignItems: "center" }}>
         <NavLink href="#features">Features</NavLink>
         <NavLink href="#how">How it works</NavLink>
         <NavLink href="/signup" cta>Sign Up</NavLink>
-        <NavLink href="/login" ctl>Login</NavLink>
-        <NavLink href="#" cta>Get Early Access</NavLink>
       </div>
     </nav>
   );

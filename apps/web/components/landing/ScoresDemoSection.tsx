@@ -8,7 +8,6 @@ export function ScoresDemoSection() {
   const [scoresRef, scoresVisible] = useInView();
   return (
     <section style={{ padding: "0 2rem 7rem", maxWidth: 1200, margin: "0 auto" }}>
-      <p style={{ fontFamily: "var(--ff-mono)", fontSize: "0.73rem", color: "var(--accent)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "0.8rem" }}>// feedback engine</p>
       <h2 style={{ fontFamily: "var(--ff-display)", fontSize: "clamp(2rem, 4vw, 3.2rem)", fontWeight: 800, letterSpacing: "-0.035em", lineHeight: 1.1, marginBottom: "3rem" }}>
         Scores that actually<br />help you improve
       </h2>

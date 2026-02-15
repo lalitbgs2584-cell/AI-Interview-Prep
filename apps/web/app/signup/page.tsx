@@ -4,7 +4,8 @@ import { useState } from "react";
 import { authClient } from "@repo/auth/client";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import "./style.css"
+import "./style.css";
+
 export default function SignUpPage() {
   const [email, setEmail]       = useState("");
   const [name, setName]         = useState("");
@@ -32,16 +33,16 @@ export default function SignUpPage() {
   };
 
   const handleGoogleSignIn = async () => {
-    await authClient.signIn.social({ provider: "google",  callbackURL: "/dashboard" });
+    await authClient.signIn.social({ provider: "google", callbackURL: "/dashboard" });
   };
   const handleGithubSignIn = async () => {
-    await authClient.signIn.social({ provider: "github",  callbackURL: "/dashboard" });
+    await authClient.signIn.social({ provider: "github", callbackURL: "/dashboard" });
   };
 
   const fields = [
-    { id: "name",     label: "Full Name",      type: "text",     value: name,     setter: setName,     placeholder: "John Doe" },
-    { id: "email",    label: "Email Address",  type: "email",    value: email,    setter: setEmail,    placeholder: "you@example.com" },
-    { id: "password", label: "Password",       type: "password", value: password, setter: setPassword, placeholder: "Min. 8 characters" },
+    { id: "name",     label: "Full Name",     type: "text",     value: name,     setter: setName,     placeholder: "John Doe" },
+    { id: "email",    label: "Email Address", type: "email",    value: email,    setter: setEmail,    placeholder: "you@example.com" },
+    { id: "password", label: "Password",      type: "password", value: password, setter: setPassword, placeholder: "Min. 8 characters" },
   ];
 
   return (
@@ -53,13 +54,14 @@ export default function SignUpPage() {
         <div className="left-panel">
           <div className="grid-overlay" />
 
-          <a href="/" className="left-logo">Prep<span>AI</span></a>
+          {/* Top: Logo */}
+          <Link href="/" className="left-logo">
+            Interview<span>AI</span>
+          </Link>
 
+          {/* Middle: Hero — grows to fill space */}
           <div className="left-hero">
-            <div className="left-hero-badge">
-              <span className="left-hero-badge-dot" />
-              AI-Powered Interview Prep
-            </div>
+            
             <h2>
               Start your journey<br />to the <em>perfect offer</em>
             </h2>
@@ -69,31 +71,17 @@ export default function SignUpPage() {
             </p>
           </div>
 
-          <div className="stat-cards">
-            {[
-              { color: "#00e5b0", label: "Active Users",       value: "12,400+" },
-              { color: "#5c9fff", label: "Interviews Run",     value: "94,000+" },
-              { color: "#c97fff", label: "Avg. Score Lift",    value: "+31 pts"  },
-            ].map((s, i) => (
-              <div className="stat-card" key={i}>
-                <div className="stat-card-dot" style={{ background: s.color }} />
-                <div>
-                  <div className="stat-card-label">{s.label}</div>
-                  <div className="stat-card-value">{s.value}</div>
-                </div>
-              </div>
-            ))}
-          </div>
+          {/* Bottom: Stat cards */}
+          
         </div>
 
         {/* ── RIGHT PANEL ── */}
         <div className="right-panel">
           <div className="form-card">
-            <p className="form-eyebrow">// get started</p>
             <h1 className="form-title">Create account</h1>
             <p className="form-sub">
               Already have one?{" "}
-              <Link href="/sign-in">Sign in instead →</Link>
+              <Link href="/login">Sign in instead →</Link>
             </p>
 
             {/* Fields */}
@@ -123,7 +111,7 @@ export default function SignUpPage() {
               onClick={handleEmailSignUp}
               disabled={loading}
             >
-              {loading ? <span className="spinner" /> : null}
+              {loading && <span className="spinner" />}
               {loading ? "Creating account…" : "Create account →"}
             </button>
 

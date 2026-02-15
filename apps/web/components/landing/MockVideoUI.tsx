@@ -61,7 +61,7 @@ export function MockVideoUI() {
               {WAVE_BARS.map((w, i) => <WaveBar key={i} delay={w.delay} height={w.h} />)}
             </div>
           </div>
-          <VidLabel text="PrepAI — Interviewer" />
+          <VidLabel text="InterviewGenie — Interviewer" />
         </div>
       </div>
 

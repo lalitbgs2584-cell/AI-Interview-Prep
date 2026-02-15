@@ -7,7 +7,6 @@ export function HowItWorksSection() {
   return (
     <div style={{ background: "var(--surface)", padding: "7rem 2rem" }} id="how">
       <div ref={stepsRef} style={{ maxWidth: 1200, margin: "0 auto" }}>
-        <p style={{ fontFamily: "var(--ff-mono)", fontSize: "0.73rem", color: "var(--accent)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: "0.8rem" }}>// the process</p>
         <h2 style={{ fontFamily: "var(--ff-display)", fontSize: "clamp(2rem, 4vw, 3.2rem)", fontWeight: 800, letterSpacing: "-0.035em", lineHeight: 1.1, marginBottom: "4rem" }}>
           From resume to<br />offer letter
         </h2>

@@ -1,10 +1,7 @@
 export const FEATURES = [
-  { icon: "🎙️", title: "Whisper-Powered Transcription", desc: "OpenAI Whisper converts your speech to text in real-time. Audio is extracted directly from the WebRTC stream — zero latency, zero dropped words.", tag: "whisper · webrtc", color: "#00e5b0", bg: "rgba(0,229,176,0.08)" },
-  { icon: "🧬", title: "Confidence Analysis", desc: "Filler word frequency, speech rate, and pause patterns combine into a real-time confidence score. Powered by librosa audio feature extraction.", tag: "pyannote · librosa", color: "#5c9fff", bg: "rgba(92,159,255,0.08)" },
-  { icon: "📑", title: "Smart Resume Parsing", desc: "Upload a PDF or DOCX — skills, roles, and keywords are extracted via LLM parsing and stored in Qdrant for deep semantic retrieval during interviews.", tag: "qdrant · pymupdf", color: "#ff6b6b", bg: "rgba(255,107,107,0.08)" },
-  { icon: "🧠", title: "Memory-Driven Sessions", desc: "Mem0 tracks every session. The AI remembers your past answers, weak areas, and growth patterns. Each interview builds intelligently on the last.", tag: "mem0 · neo4j", color: "#c97fff", bg: "rgba(201,127,255,0.08)" },
-  { icon: "⚡", title: "Valkey Queue Isolation", desc: "Interview sessions run through a Valkey-backed job queue. Heavy AI inference never blocks other users — every session runs in its own worker.", tag: "valkey · docker", color: "#ffd15c", bg: "rgba(255,209,92,0.08)" },
-  { icon: "🎯", title: "Adaptive Question Flow", desc: "Questions adapt in real-time. Strong reply? The AI goes deeper. Struggled? It pivots to scaffolding follow-ups. Powered by GPT-o3 with streaming.", tag: "gpt-o3 · streaming", color: "#00e5b0", bg: "rgba(0,229,176,0.08)" },
+  { icon: "🧬", title: "Confidence Analysis", desc: "Filler word frequency, speech rate, and pause patterns combine into a real-time confidence score. Powered by librosa audio feature extraction.",  color: "#5c9fff", bg: "rgba(92,159,255,0.08)" },
+  { icon: "📑", title: "Smart Resume Parsing", desc: "Upload a PDF or DOCX — skills, roles, and keywords are extracted via LLM parsing and stored in Qdrant for deep semantic retrieval during interviews.",  color: "#ff6b6b", bg: "rgba(255,107,107,0.08)" },
+  { icon: "🎯", title: "Adaptive Question Flow", desc: "Questions adapt in real-time. Strong reply? The AI goes deeper. Struggled? It pivots to scaffolding follow-ups. Powered by GPT-o3 with streaming.",  color: "#00e5b0", bg: "rgba(0,229,176,0.08)" },
 ];
 
 export const STEPS = [
