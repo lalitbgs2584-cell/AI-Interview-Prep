@@ -1,0 +1,10 @@
+name: "AI Interview Preparation"
+services:
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env

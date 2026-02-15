@@ -6,6 +6,7 @@
     "build": "turbo build",
     "dev": "turbo dev",
     "lint": "turbo lint",
+    "db:migrate": "cd packages/db && npx prisma generate && cd ../..",
     "format": "prettier --write \"**/*.{ts,tsx,md}\""
   },
   "devDependencies": {

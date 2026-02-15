@@ -1,0 +1,19 @@
+# Dependencies
+node_modules
+**/node_modules
+
+# Build outputs
+.next
+**/.next
+dist
+**/dist
+build
+**/build
+
+# Git
+.git
+.github
+
+
+
+
