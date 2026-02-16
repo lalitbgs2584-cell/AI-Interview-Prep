@@ -1,4 +1,5 @@
 name: "AI Interview Preparation"
+
 services:
   web:
     build:
@@ -8,3 +9,31 @@ services:
       - "3000:3000"
     env_file:
       - .env
+    environment:
+      - HOSTNAME=0.0.0.0
+      - PORT=3000
+    depends_on:
+      postgres:
+        condition: service_healthy   # ← waits for DB to be truly ready
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: prisma
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # ← persist data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s   # ← grace period before healthcheck starts
+
+volumes:
+  postgres_data:

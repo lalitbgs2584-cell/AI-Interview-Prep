@@ -2,11 +2,12 @@
   "name": "@repo/auth",
   "version": "1.0.0",
   "description": "Shared auth utilities for Turborepo",
-  "main": "src/index.ts",
+  "main": "./dist/index.js",
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@repo/db": "workspace:*",
     "better-auth": "^1.4.18"
   },
   "scripts": {
@@ -18,8 +19,8 @@
     "dotenv": "^17.3.0"
   },
   "exports": {
-    "./client": "./src/client.ts",
-    "./server": "./src/server.ts"
+    "./client": "./dist/client.js",
+    "./server": "./dist/server.js"
   },
   "type": "module"
 }
