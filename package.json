@@ -8,7 +8,6 @@
     "lint": "turbo lint",
     "db:generate": "cd packages/db && npx prisma generate cd ../..",
     "db:migrate": "cd packages/db && npx prisma migrate deploy cd ../..",
-    
     "db:setup": "pnpm db:generate && pnpm db:migrate",
     "format": "prettier --write \"**/*.{ts,tsx,md}\""
   },

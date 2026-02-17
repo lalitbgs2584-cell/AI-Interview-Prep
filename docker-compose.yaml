@@ -1,24 +1,8 @@
-name: "AI Interview Preparation"
+name: ai-interview-preparation
 
 services:
-  web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
-    ports:
-      - "3000:3000"
-    env_file:
-      - .env
-    environment:
-      - HOSTNAME=0.0.0.0
-      - PORT=3000
-    depends_on:
-      postgres:
-        condition: service_healthy   # ← waits for DB to be truly ready
-    restart: unless-stopped
-
   postgres:
-    image: postgres:15
+    image: postgres:18-alpine
     restart: always
     environment:
       POSTGRES_DB: postgres
@@ -27,13 +11,42 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data   # ← persist data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s   # ← grace period before healthcheck starts
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prisma-studio:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: >
+      sh -c "npm install -g prisma &&
+             prisma studio --port 5555 --hostname 0.0.0.0"
+    ports:
+      - "5555:5555"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   postgres_data:

@@ -1,15 +1,15 @@
-# ----------------------------- 
+# ---------------------------------------------------
 # Base Image
-# ----------------------------- 
-FROM node:22.13.1-alpine3.21 AS base
+# ---------------------------------------------------
+FROM node:22-alpine AS base
 WORKDIR /app
 
 RUN apk add --no-cache libc6-compat openssl bash curl
-RUN npm i -g pnpm
+RUN npm install -g pnpm
 
-# ----------------------------- 
+# ---------------------------------------------------
 # Dependencies Stage
-# ----------------------------- 
+# ---------------------------------------------------
 FROM base AS deps
 WORKDIR /app
 
@@ -19,31 +19,31 @@ COPY packages ./packages
 
 RUN pnpm install --frozen-lockfile
 
-# ----------------------------- 
+# ---------------------------------------------------
 # Builder Stage
-# ----------------------------- 
+# ---------------------------------------------------
 FROM base AS builder
 WORKDIR /app
 
 COPY --from=deps /app /app
 COPY . .
 
-# Generate Prisma client (binaryTargets should include "linux-musl" in schema.prisma)
+# Generate Prisma client (Prisma 7)
 RUN pnpm db:generate
 
-# Build Next.js standalone output
+# Build packages
+RUN pnpm --filter @repo/db build
+RUN pnpm --filter @repo/auth build
 RUN pnpm --filter web build
 
-# Debug: confirm server.js exists (remove in prod)
-RUN find /app/apps/web/.next/standalone -name "server.js" || true
-
-# ----------------------------- 
+# ---------------------------------------------------
 # Production Runner
-# ----------------------------- 
-FROM node:22.13.1-alpine3.21 AS runner
+# ---------------------------------------------------
+FROM node:22-alpine AS runner
 WORKDIR /app
 
 RUN apk add --no-cache libc6-compat openssl bash curl
+RUN npm install -g prisma
 
 ENV NODE_ENV=production
 ENV PORT=3000
@@ -52,26 +52,23 @@ ENV HOSTNAME=0.0.0.0
 RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 nextjs
 
-# Copy Next.js standalone output (includes its own node_modules)
+# Copy Next standalone output
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
-
-# Copy static assets (CSS, JS chunks, etc.)
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./.next/static
-
-# Copy public folder
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/public ./public
 
 # Copy Prisma schema + migrations
-COPY --from=builder --chown=nextjs:nodejs /app/packages/db ./packages/db
+COPY --from=builder --chown=nextjs:nodejs /app/packages/db/prisma ./packages/db/prisma
 
-# Install pinned Prisma CLI (match your actual version, e.g. 5.x)
-# Do this as root before switching users
-RUN npm install --prefix /app prisma @prisma/client \
-  && cd /app/packages/db \
-  && npx prisma generate
+# 🔥 CRITICAL for Prisma 7
+COPY --from=builder --chown=nextjs:nodejs /app/packages/db/prisma.config.ts ./packages/db/prisma.config.ts
 
-# Fix ownership of installed node_modules
-RUN chown -R nextjs:nodejs /app/node_modules
+# Copy compiled packages
+COPY --from=builder --chown=nextjs:nodejs /app/packages/db/dist ./packages/db/dist
+COPY --from=builder --chown=nextjs:nodejs /app/packages/auth/dist ./packages/auth/dist
+
+# Copy Prisma engine files
+COPY --from=builder --chown=nextjs:nodejs /app/packages/db/node_modules ./packages/db/node_modules
 
 USER nextjs
 
@@ -80,9 +77,9 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget -qO- http://localhost:3000/api/health || exit 1
 
-CMD bash -c "\
-  echo 'Running Prisma migrations...'\
-  cd /app/packages/db && npx prisma migrate deploy\
-  echo 'Starting Next.js server...'\
-  cd /app && node server.js\
+CMD sh -c "\
+  echo 'Running Prisma migrations...' && \
+  prisma migrate deploy && \
+  echo 'Starting Next.js server...' && \
+  node server.js \
 "
