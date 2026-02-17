@@ -8,8 +8,8 @@
     "lint": "turbo lint",
     "db:generate": "cd packages/db && npx prisma generate cd ../..",
     "db:migrate": "cd packages/db && npx prisma migrate deploy cd ../..",
-    
     "db:setup": "pnpm db:generate && pnpm db:migrate",
+    "build:all": "pnpm run build --filter @repo/db && pnpm run build --filter @repo/auth && pnpm run build --filter web",
     "format": "prettier --write \"**/*.{ts,tsx,md}\""
   },
   "devDependencies": {
@@ -22,5 +22,16 @@
   "packageManager": "pnpm@10.4.1",
   "engines": {
     "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "better-sqlite3",
+      "core-js-pure",
+      "esbuild",
+      "prisma",
+      "sharp"
+    ]
   }
 }
