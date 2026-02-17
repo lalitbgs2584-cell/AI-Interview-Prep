@@ -2,7 +2,8 @@ name: ai-interview-preparation
 
 services:
   postgres:
-    image: postgres:18-alpine
+    image: postgres:16-alpine
+    container_name: postgres
     restart: always
     environment:
       POSTGRES_DB: postgres
@@ -22,31 +23,27 @@ services:
   web:
     build:
       context: .
-      dockerfile: apps/web/Dockerfile
+      dockerfile: apps/web/Dockerfile  # Your existing Dockerfile
+    container_name: ai-interview-preparation-web
     ports:
       - "3000:3000"
     env_file:
-      - .env
+      - .env.docker
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-
   prisma-studio:
     image: node:22-alpine
-    working_dir: /app
-    volumes:
-      - .:/app
-    command: >
-      sh -c "npm install -g prisma &&
-             prisma studio --port 5555 --hostname 0.0.0.0"
+    container_name: prisma-studio
     ports:
       - "5555:5555"
-    env_file:
-      - .env
+    volumes:
+      - ./packages/db/prisma:/app/prisma
+    working_dir: /app
+    command: sh -c "npm install -g prisma@7.4.0 && prisma studio --port 5555 --browser none --url postgresql://postgres:prisma@postgres:5432/postgres"
     depends_on:
       postgres:
         condition: service_healthy
-
 volumes:
   postgres_data:
