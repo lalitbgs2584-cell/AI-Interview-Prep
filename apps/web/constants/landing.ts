@@ -6,9 +6,9 @@ export const FEATURES = [
 
 export const STEPS = [
   { num: "01", icon: "📄", title: "Upload Your Resume", desc: "We parse your resume and job description to extract skills, experience, and gaps. Stored securely and referenced by the AI throughout your session." },
-  { num: "02", icon: "🧠", title: "AI Generates Questions", desc: "GPT-o3 crafts a personalized question set — technical, behavioral, and situational — calibrated to your experience level and target role." },
-  { num: "03", icon: "🎥", title: "Live Video Interview", desc: "Your face is visible; the AI speaks in real-time audio. Answers are transcribed and analyzed for tone, vocabulary, and technical depth." },
-  { num: "04", icon: "📊", title: "Deep Feedback Report", desc: "Receive a scored breakdown: confidence, vocab richness, topic mastery. The AI remembers your history via Mem0 to track long-term improvement." },
+  { num: "02", icon: "🧠", title: "AI Generates Questions", desc: "AI crafts a personalized question set — technical, behavioral, and situational — calibrated to your experience level and target role." },
+  { num: "03", icon: "🎥", title: "Live Video Interview", desc: "Your face is visible, the AI speaks in real-time audio. Answers are transcribed and analyzed for tone, vocabulary, and technical depth." },
+  { num: "04", icon: "📊", title: "Deep Feedback Report", desc: "Receive a scored breakdown: confidence, vocab richness, topic mastery. The AI remembers your history  to track long-term improvement." },
 ];
 
 export const STACK = [

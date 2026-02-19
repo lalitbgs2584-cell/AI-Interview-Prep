@@ -31,7 +31,7 @@ export function ScoresDemoSection() {
             </p>
           </div>
           <p style={{ fontFamily: "var(--ff-mono)", fontSize: "0.73rem", color: "var(--muted)" }}>
-            <span style={{ color: "var(--accent)" }}>↑ 12 pts</span> improvement since last session · powered by Mem0
+            <span style={{ color: "var(--accent)" }}>↑ 12 pts</span> improvement since last session 
           </p>
         </div>
       </div>

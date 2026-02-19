@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { authClient } from "@repo/auth/client";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -8,7 +8,6 @@ import "./style.css";
 
 export default function SignUpPage() {
   const [email, setEmail]       = useState("");
-  const [name, setName]         = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading]   = useState(false);
   const [focused, setFocused]   = useState<string | null>(null);
@@ -17,10 +16,10 @@ export default function SignUpPage() {
   const handleEmailSignUp = async () => {
     setLoading(true);
     try {
-      const { error } = await authClient.signUp.email({
+      const { error } = await authClient.signIn.email({
         email,
         password,
-        name,
+        rememberMe: true,
         callbackURL: "/dashboard",
       });
       if (error) { alert(error.message); return; }
@@ -37,7 +36,7 @@ export default function SignUpPage() {
   };
   const handleGithubSignIn = async () => {
     await authClient.signIn.social({ provider: "github", callbackURL: "/dashboard" });
-  };
+  }; 
 
   const fields = [
     { id: "email",    label: "Email Address", type: "email",    value: email,    setter: setEmail,    placeholder: "you@example.com" },
@@ -109,7 +108,7 @@ export default function SignUpPage() {
               disabled={loading}
             >
               {loading && <span className="spinner" />}
-              {loading ? "Creating account…" : "Create account →"}
+              {loading ? "Logging in…" : "Sign In  →"}
             </button>
 
             <div className="divider">or continue with</div>
@@ -132,7 +131,7 @@ export default function SignUpPage() {
             </button>
 
             <p className="terms">
-              By creating an account, you agree to our{" "}
+              By Signing in, you agree to our{" "}
               <span>Terms of Service</span> and{" "}
               <span>Privacy Policy</span>.
             </p>

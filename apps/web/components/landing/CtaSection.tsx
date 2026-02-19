@@ -13,7 +13,7 @@ export function CtaSection() {
         <p style={{ color: "var(--muted)", fontSize: "1.1rem", maxWidth: 460, margin: "0 auto 3rem", lineHeight: 1.7 }}>
           Join early access and get your first 3 AI interviews completely free. No credit card required.
         </p>
-        <BtnPrimary large>Get Early Access →</BtnPrimary>
+        <BtnPrimary  large>Get Early Access →</BtnPrimary>
       </div>
     </section>
   );
