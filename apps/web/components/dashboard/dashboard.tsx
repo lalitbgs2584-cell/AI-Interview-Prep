@@ -74,7 +74,7 @@ export default function DashboardPage() {
 
       <div className="dash-root">
         {/* ════ SIDEBAR ════ */}
-        <aside className="sidebar">
+        <aside className="sidebar">  
           <Link href="/" className="sidebar-logo">Prep<span>AI</span></Link>
 
           <nav className="sidebar-nav">
