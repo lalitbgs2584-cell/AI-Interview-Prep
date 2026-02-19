@@ -1,8 +1,13 @@
 import { BtnPrimary } from "../BtnPrimary";
+import { redirect } from "next/navigation";
 
 
+export async function CtaSection() {
 
-export function CtaSection() {
+
+  const handleEarlyAccess = async () => {
+    redirect("/login")
+  }
   return (
     <section style={{ padding: "9rem 2rem", textAlign: "center", position: "relative", overflow: "hidden" }}>
       <div style={{ position: "absolute", width: 700, height: 500, borderRadius: "50%", background: "radial-gradient(ellipse, rgba(0,229,176,0.06) 0%, transparent 70%)", top: "50%", left: "50%", transform: "translate(-50%, -50%)", pointerEvents: "none" }} />
@@ -13,7 +18,7 @@ export function CtaSection() {
         <p style={{ color: "var(--muted)", fontSize: "1.1rem", maxWidth: 460, margin: "0 auto 3rem", lineHeight: 1.7 }}>
           Join early access and get your first 3 AI interviews completely free. No credit card required.
         </p>
-        <BtnPrimary  large>Get Early Access →</BtnPrimary>
+        <BtnPrimary onClick={handleEarlyAccess} large>Get Started</BtnPrimary>
       </div>
     </section>
   );

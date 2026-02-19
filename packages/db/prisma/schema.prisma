@@ -1,6 +1,5 @@
-
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl", "linux-musl-openssl-3.0.x"]
 }
 
@@ -8,16 +7,38 @@ datasource db {
   provider = "postgresql"
 }
 
+// ENUMS
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum SubscriptionPlan {
+  FREE
+  PRO
+  PREMIUM
+}
+
+// USER & AUTH SECTION
+
 model User {
-  id            String    @id @default(uuid())
-  email         String    @unique
+  id            String  @id @default(uuid())
+  email         String  @unique
   name          String
-  emailVerified Boolean   @default(false)
+  emailVerified Boolean @default(false)
   image         String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  sessions      Session[]
-  accounts      Account[]
+
+  role UserRole         @default(USER)
+  plan SubscriptionPlan @default(FREE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions   Session[]
+  accounts   Account[]
+  interviews Interview[]
+  skills     UserSkill[]
 
   @@map("user")
 }
@@ -25,25 +46,27 @@ model User {
 model Session {
   id        String   @id
   expiresAt DateTime
-  token     String
+  token     String   @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   ipAddress String?
   userAgent String?
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([token])
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId])
   @@map("session")
 }
 
 model Account {
-  id                    String    @id
-  accountId             String
-  providerId            String
-  userId                String
-  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         String @id
+  accountId  String
+  providerId String
+  userId     String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   accessToken           String?
   refreshToken          String?
   idToken               String?
@@ -51,8 +74,9 @@ model Account {
   refreshTokenExpiresAt DateTime?
   scope                 String?
   password              String?
-  createdAt             DateTime  @default(now())
-  updatedAt             DateTime  @updatedAt
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([userId])
   @@map("account")
@@ -68,4 +92,138 @@ model Verification {
 
   @@index([identifier])
   @@map("verification")
+}
+
+// SKILL SECTION
+
+model Skill {
+  id    String      @id @default(uuid())
+  name  String      @unique
+  users UserSkill[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("skill")
+}
+
+model UserSkill {
+  userId  String
+  skillId String
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, skillId])
+  @@index([userId])
+  @@index([skillId])
+  @@map("user_skill")
+}
+
+// QUESTION BANK
+
+model Question {
+  id         String  @id @default(uuid())
+  content    String
+  difficulty String?
+  type       String?
+
+  interviews InterviewQuestion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("question")
+}
+
+// INTERVIEW SECTION
+
+model Interview {
+  id          String  @id @default(uuid())
+  title       String
+  description String?
+  userId      String
+
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  questions InterviewQuestion[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  @@index([userId])
+  @@map("interview")
+}
+
+// INTERVIEW-QUESTION (JOIN TABLE)
+
+model InterviewQuestion {
+  id String @id @default(uuid())
+
+  interviewId String
+  questionId  String
+
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  question  Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  response Response?
+
+  order Int?
+  score Int?
+
+  createdAt DateTime @default(now())
+
+  @@unique([interviewId, questionId])
+  @@index([interviewId])
+  @@index([questionId])
+  @@map("interview_question")
+}
+
+// RESPONSE (USER ANSWER)
+
+model Response {
+  id String @id @default(uuid())
+
+  interviewQuestionId String            @unique
+  interviewQuestion   InterviewQuestion @relation(fields: [interviewQuestionId], references: [id], onDelete: Cascade)
+
+  userText       String?
+  userAudioUrl   String?
+  userTranscript String?
+
+  aiIdealAnswer  String?   // AI suggested correct answer
+
+  durationSeconds Int?
+  submittedAt     DateTime?
+
+  evaluation Evaluation?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([interviewQuestionId])
+  @@map("response")
+}
+
+// AI EVALUATION (PER QUESTION)
+
+model Evaluation {
+  id String @id @default(uuid())
+
+  responseId String   @unique
+  response   Response @relation(fields: [responseId], references: [id], onDelete: Cascade)
+
+  score      Int?
+  clarity    Int?
+  technical  Int?
+  confidence Int?
+
+  feedback     String?
+  strengths    String?
+  improvements String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("evaluation")
 }
