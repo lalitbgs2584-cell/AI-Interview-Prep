@@ -28,7 +28,6 @@ export function Navbar() {
       <div className="nav-links-desktop" style={{ display: "flex", gap: "2.5rem", alignItems: "center" }}>
         <NavLink href="#features">Features</NavLink>
         <NavLink href="#how">How it works</NavLink>
-        <NavLink href="#pricing">Pricing</NavLink>
         <NavLink href="/signup" cta>Sign Up</NavLink>
       </div>
     </nav>

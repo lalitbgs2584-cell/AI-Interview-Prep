@@ -22,6 +22,7 @@
   "engines": {
     "node": ">=20"
   },
+  "workspaces":["packages/*","apps/*"],
   "pnpm": {
     "onlyBuiltDependencies": [
       "@prisma/client",

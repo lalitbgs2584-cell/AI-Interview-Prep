@@ -1,6 +1,5 @@
 "use client";
 import { Navbar, HeroSection, HowItWorksSection, FeaturesSection, ScoresDemoSection, CtaSection, Footer  } from "@/components/landing";
-import {PricingSection} from "./PricingSection";
 
 export default function LandingPage() {
   return (
@@ -10,7 +9,6 @@ export default function LandingPage() {
       <HeroSection />
       <HowItWorksSection />
       <FeaturesSection />
-      <PricingSection />
       <ScoresDemoSection />
       <CtaSection />
       <Footer />

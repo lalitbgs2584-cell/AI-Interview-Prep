@@ -1,0 +1,28 @@
+{
+  "name": "ws-backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": ".dist/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@repo/auth": "workspace:*",
+    "@repo/db": "workspace:*",
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "@repo/auth": "workspace:*",
+    "@repo/db": "workspace:*",
+    "@types/express": "^5.0.6",
+    "@workspace/typescript-config": "workspace:*",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.9.3"
+  }
+}
