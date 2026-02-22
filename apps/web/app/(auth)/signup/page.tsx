@@ -21,10 +21,10 @@ export default function SignUpPage() {
         email,
         password,
         name,
-        callbackURL: "/dashboard",
+        callbackURL: "/dashboard/",
       });
       if (error) { alert(error.message); return; }
-      router.push("/dashboard");
+      router.push("/dashboard/");
     } catch (err) {
       console.error("Sign up error:", err);
     } finally {
@@ -33,10 +33,10 @@ export default function SignUpPage() {
   };
 
   const handleGoogleSignIn = async () => {
-    await authClient.signIn.social({ provider: "google", callbackURL: "/dashboard" });
+    await authClient.signIn.social({ provider: "google", callbackURL: "/dashboard/" });
   };
   const handleGithubSignIn = async () => {
-    await authClient.signIn.social({ provider: "github", callbackURL: "/dashboard" });
+    await authClient.signIn.social({ provider: "github", callbackURL: "/dashboard/" });
   };
 
   const fields = [
@@ -67,7 +67,7 @@ export default function SignUpPage() {
             </h2>
             <p>
               Create your account and get personalized mock interviews,
-              real-time feedback, and memory-driven coaching — all powered by GPT-o3.
+              real-time feedback, and memory-driven coaching — all powered by AI.
             </p>
           </div>
 

@@ -16,18 +16,63 @@ enum UserRole {
 
 enum SubscriptionPlan {
   FREE
+  STARTER
   PRO
-  PREMIUM
+  ENTERPRISE
 }
 
-// USER & AUTH SECTION
+enum InterviewStatus {
+  CREATED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum InterviewType {
+  TECHNICAL
+  HR
+  SYSTEM_DESIGN
+  BEHAVIORAL
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum PaymentStatus {
+  CREATED
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum SubscriptionStatus {
+  CREATED
+  ACTIVE
+  CANCELLED
+  PAST_DUE
+}
+
+// USER & AUTH
 
 model User {
-  id            String  @id @default(uuid())
-  email         String  @unique
-  name          String
+  id        String  @id @default(uuid())
+  email     String  @unique
+  name      String
+  image     String?
+
   emailVerified Boolean @default(false)
-  image         String?
+
+  // Resume
+  isResumeUploaded Boolean   @default(false)
+  resumeUrl        String?
+  resumeFileName   String?
+  resumeUploadedAt DateTime?
+
+  // Soft delete
+  isDeleted Boolean @default(false)
 
   role UserRole         @default(USER)
   plan SubscriptionPlan @default(FREE)
@@ -35,11 +80,14 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  sessions   Session[]
-  accounts   Account[]
-  interviews Interview[]
-  skills     UserSkill[]
+  sessions     Session[]
+  accounts     Account[]
+  interviews   Interview[]
+  skills       UserSkill[]
+  subscription Subscription?
+  payments     Payment[]
 
+  @@index([plan])
   @@map("user")
 }
 
@@ -53,7 +101,7 @@ model Session {
   userAgent String?
 
   userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("session")
@@ -94,11 +142,12 @@ model Verification {
   @@map("verification")
 }
 
-// SKILL SECTION
+// SKILLS
 
 model Skill {
-  id    String      @id @default(uuid())
-  name  String      @unique
+  id   String @id @default(uuid())
+  name String @unique
+
   users UserSkill[]
 
   createdAt DateTime @default(now())
@@ -117,34 +166,41 @@ model UserSkill {
   @@unique([userId, skillId])
   @@index([userId])
   @@index([skillId])
+
   @@map("user_skill")
 }
 
 // QUESTION BANK
 
 model Question {
-  id         String  @id @default(uuid())
+  id         String     @id @default(uuid())
   content    String
-  difficulty String?
-  type       String?
+  difficulty Difficulty?
+  type       InterviewType?
 
   interviews InterviewQuestion[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([difficulty])
+  @@index([type])
   @@map("question")
 }
 
-// INTERVIEW SECTION
+// INTERVIEWS
 
 model Interview {
-  id          String  @id @default(uuid())
+  id          String @id @default(uuid())
   title       String
   description String?
-  userId      String
 
-  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  status InterviewStatus @default(CREATED)
+  type   InterviewType   @default(TECHNICAL)
+
   questions InterviewQuestion[]
 
   createdAt   DateTime  @default(now())
@@ -152,10 +208,9 @@ model Interview {
   completedAt DateTime?
 
   @@index([userId])
+  @@index([status])
   @@map("interview")
 }
-
-// INTERVIEW-QUESTION (JOIN TABLE)
 
 model InterviewQuestion {
   id String @id @default(uuid())
@@ -179,7 +234,7 @@ model InterviewQuestion {
   @@map("interview_question")
 }
 
-// RESPONSE (USER ANSWER)
+// RESPONSE & AI EVALUATION
 
 model Response {
   id String @id @default(uuid())
@@ -191,10 +246,10 @@ model Response {
   userAudioUrl   String?
   userTranscript String?
 
-  aiIdealAnswer  String?   // AI suggested correct answer
+  aiIdealAnswer String?
 
   durationSeconds Int?
-  submittedAt     DateTime?
+  submittedAt    DateTime?
 
   evaluation Evaluation?
 
@@ -205,18 +260,16 @@ model Response {
   @@map("response")
 }
 
-// AI EVALUATION (PER QUESTION)
-
 model Evaluation {
   id String @id @default(uuid())
 
   responseId String   @unique
   response   Response @relation(fields: [responseId], references: [id], onDelete: Cascade)
 
-  score      Int?
-  clarity    Int?
-  technical  Int?
-  confidence Int?
+  overallScore Int?
+  clarity      Int?
+  technical    Int?
+  confidence   Int?
 
   feedback     String?
   strengths    String?
@@ -226,4 +279,54 @@ model Evaluation {
   updatedAt DateTime @updatedAt
 
   @@map("evaluation")
+}
+
+// SUBSCRIPTION & BILLING
+
+model Subscription {
+  id String @id @default(uuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  razorpayCustomerId     String?
+  razorpaySubscriptionId String? @unique
+  razorpayPlanId         String?
+
+  status SubscriptionStatus?
+
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payments Payment[]
+
+  @@map("subscription")
+}
+
+model Payment {
+  id String @id @default(uuid())
+
+  userId String
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+
+  razorpayOrderId   String?
+  razorpayPaymentId String? @unique
+  razorpaySignature String?
+
+  amount   Int
+  currency String @default("INR")
+
+  status PaymentStatus?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("payment")
 }
