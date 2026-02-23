@@ -14,10 +14,11 @@ const client = new S3Client({
 export async function POST(req: Request) {
   try {
     const {  fileType:mime } = await req.json();
-
+    console.log(mime)
     // ✅ Generate unique filename: UUID + original extension
     const filename = uuid()
     const key = `uploads/${filename}.${mime}`;  // Organized path + unique name
+    console.log(key)
 
     const command = new PutObjectCommand({
       Bucket: process.env.AWS_S3_BUCKET_NAME!,
@@ -31,7 +32,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ 
       url, 
       key, 
-      Filename: filename 
+      Filename: `${filename}.${mime}` 
     });
   } catch (error) {
     console.error('Presigned URL error:', error);

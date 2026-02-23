@@ -14,6 +14,10 @@ const io = new Server(httpServer, {
 
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
+
+  io.on("resume_uploaded",(data)=>{
+    
+  })
 });
 
 httpServer.listen(4000, () => {

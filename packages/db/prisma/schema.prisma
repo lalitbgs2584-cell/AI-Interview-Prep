@@ -14,12 +14,6 @@ enum UserRole {
   ADMIN
 }
 
-enum SubscriptionPlan {
-  FREE
-  STARTER
-  PRO
-  ENTERPRISE
-}
 
 enum InterviewStatus {
   CREATED
@@ -35,24 +29,18 @@ enum InterviewType {
   BEHAVIORAL
 }
 
+enum FileStatus {
+  STARTING
+  UPLOADED
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
 enum Difficulty {
   EASY
   MEDIUM
   HARD
-}
-
-enum PaymentStatus {
-  CREATED
-  PAID
-  FAILED
-  REFUNDED
-}
-
-enum SubscriptionStatus {
-  CREATED
-  ACTIVE
-  CANCELLED
-  PAST_DUE
 }
 
 // USER & AUTH
@@ -67,15 +55,12 @@ model User {
 
   // Resume
   isResumeUploaded Boolean   @default(false)
-  resumeUrl        String?
-  resumeFileName   String?
-  resumeUploadedAt DateTime?
+  
 
   // Soft delete
   isDeleted Boolean @default(false)
 
   role UserRole         @default(USER)
-  plan SubscriptionPlan @default(FREE)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -84,10 +69,8 @@ model User {
   accounts     Account[]
   interviews   Interview[]
   skills       UserSkill[]
-  subscription Subscription?
-  payments     Payment[]
+  files        File[]
 
-  @@index([plan])
   @@map("user")
 }
 
@@ -281,52 +264,21 @@ model Evaluation {
   @@map("evaluation")
 }
 
-// SUBSCRIPTION & BILLING
-
-model Subscription {
-  id String @id @default(uuid())
-
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  razorpayCustomerId     String?
-  razorpaySubscriptionId String? @unique
-  razorpayPlanId         String?
-
-  status SubscriptionStatus?
-
-  currentPeriodStart DateTime?
-  currentPeriodEnd   DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  payments Payment[]
-
-  @@map("subscription")
-}
-
-model Payment {
+model File{
   id String @id @default(uuid())
 
   userId String
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  subscriptionId String?
-  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
-
-  razorpayOrderId   String?
-  razorpayPaymentId String? @unique
-  razorpaySignature String?
-
-  amount   Int
-  currency String @default("INR")
-
-  status PaymentStatus?
+  url      String
+  OriginalFileName String
+  fileType String
+  S3FileName String
+  status  FileStatus @default(STARTING)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId])
-  @@map("payment")
+  @@map("file")
 }

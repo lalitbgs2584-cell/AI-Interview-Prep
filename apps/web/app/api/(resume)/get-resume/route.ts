@@ -14,20 +14,19 @@ export async function GET(req: NextRequest) {
       redirect("/login");
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: session.user.id },
+    const file = await prisma.file.findFirst({
+      where: { userId: session.user.id },
     });
 
-    if (!user) {
+    if (!file) {
       return NextResponse.json(
-        { error: "User not found" },
+        { error: "File not found" },
         { status: 404 }
       );
     }
-
     return NextResponse.json({
-      resumeUrl: user.resumeUrl?.split("uploads/")[1] || null, 
-      resumeFileName: user.resumeFileName,
+      resumeUrl: file.url?.split("uploads/")[1] || null, 
+      resumeFileName: file.OriginalFileName,
     });
         
 

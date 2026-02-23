@@ -1,19 +1,20 @@
 "use client";
 
+import { getSocket } from "@/ws-client-config/socket";
 import { useEffect, useRef, useState } from "react";
 
 const insights = [
-  { label: "Experience Level",    val: "Senior · 6+ years",              dot: "dot-accent" },
+  { label: "Experience Level", val: "Senior · 6+ years", dot: "dot-accent" },
   { label: "Key Skills Detected", val: "React, Node.js, AWS, PostgreSQL", dot: "dot-gold" },
-  { label: "Target Roles",        val: "Staff Engineer · Tech Lead",      dot: "dot-violet" },
-  { label: "ATS Score",           val: "82 / 100 — Good",                 dot: "dot-accent" },
+  { label: "Target Roles", val: "Staff Engineer · Tech Lead", dot: "dot-violet" },
+  { label: "ATS Score", val: "82 / 100 — Good", dot: "dot-accent" },
 ];
 
 const suggestions = [
-  { text: "Add quantified impact to your Amazon role",     priority: "high" },
+  { text: "Add quantified impact to your Amazon role", priority: "high" },
   { text: "Mention system scale in System Design bullets", priority: "medium" },
-  { text: "Include open-source contributions",             priority: "low" },
-  { text: "Add certifications section (AWS, GCP)",         priority: "medium" },
+  { text: "Include open-source contributions", priority: "low" },
+  { text: "Add certifications section (AWS, GCP)", priority: "medium" },
 ];
 
 function priorityClass(p: string) {
@@ -30,12 +31,12 @@ type UploadStatus = "idle" | "uploading" | "done" | "error";
 
 export default function ResumePage() {
   // ── All hooks at component top level — never inside functions ──
-  const fileInputRef                    = useRef<HTMLInputElement>(null);
-  const [file,         setFile]         = useState<File | null>(null);
-  const [previewUrl,   setPreviewUrl]   = useState<string | null>(null);
-  const [isDrag,       setIsDrag]       = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isDrag, setIsDrag] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle");
-  const [iframeError,  setIframeError]  = useState(false);  // ✅ fixed: handles CloudFront X-Frame-Options block
+  const [iframeError, setIframeError] = useState(false);  // ✅ fixed: handles CloudFront X-Frame-Options block
 
   // ── On mount: load existing resume from DB ─────────────────
   useEffect(() => {
@@ -73,6 +74,7 @@ export default function ResumePage() {
   function removeFile() {
     if (previewUrl && previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
     setFile(null);
+
     setPreviewUrl(null);
     setUploadStatus("idle");
     setIframeError(false);
@@ -95,10 +97,14 @@ export default function ResumePage() {
       const presignRes = await fetch("/api/get-presigned-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName: file.name, fileType: mime }),
+        body: JSON.stringify({ fileName: file.name, fileType: mime.split("/")[1] }),
       });
+
       if (!presignRes.ok) throw new Error("Failed to get presigned URL");
-      const { url } = await presignRes.json();
+      const { url, key, Filename: S3fileName } = await presignRes.json();
+      console.log("url:", url)
+      console.log("key:", key)
+      console.log("Filename:", S3fileName)
 
       // 2. PUT file directly to S3
       const uploadRes = await fetch(url, {
@@ -106,24 +112,42 @@ export default function ResumePage() {
         headers: { "Content-Type": file.type },
         body: file,
       });
-      if (!uploadRes.ok) throw new Error("S3 upload failed");
 
+      if (!uploadRes.ok) throw new Error("S3 upload failed");
+      console.log("upload result are:", uploadRes)
       // 3. Strip presigned query params to get clean URL
       const fileUrl = url.split("?")[0];
+      console.log("File url is : ", fileUrl)
 
       // 4. Save URL + filename to DB via server API route
       const saveRes = await fetch("/api/save-resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileUrl, fileName: file.name }),
+        body: JSON.stringify({ fileUrl, fileName: file.name, mime, S3fileName }),
       });
       if (!saveRes.ok) throw new Error("Failed to save resume to DB");
+      const { fileId } = await saveRes.json()
+      // Bonus: emit WebSocket event to trigger AI processing immediately
+      const socket = getSocket()
 
+      if (!socket.connected) {
+        await new Promise((resolve) => {
+          socket.on("connect", () => resolve(undefined));
+        });
+      }
       // 5. Update UI
       setPreviewUrl(fileUrl);
       setIframeError(false);
       setUploadStatus("done");
       window.location.reload();
+
+      // call the backend to process the resume
+      await fetch("http://localhost:4000//api/process-resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileId }),
+      });
+
 
     } catch (err) {
       console.error(err);

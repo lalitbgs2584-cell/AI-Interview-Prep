@@ -1,0 +1,14 @@
+services:
+  valkey:
+    image: docker.io/bitnami/valkey:latest
+    ports:
+      - '6379:6379'
+    environment:
+      # WARNING: ALLOW_EMPTY_PASSWORD is for development only.
+      # For production, use VALKEY_PASSWORD and bind to a specific interface.
+      - ALLOW_EMPTY_PASSWORD=yes
+    volumes:
+      - 'valkey_data:/bitnami/valkey/data'
+volumes:
+  valkey_data:
+    driver: local
