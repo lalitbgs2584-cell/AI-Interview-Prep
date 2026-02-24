@@ -1,3 +1,4 @@
+
 generator client {
   provider      = "prisma-client-js"
   binaryTargets = ["native", "linux-musl", "linux-musl-openssl-3.0.x"]
@@ -7,13 +8,87 @@ datasource db {
   provider = "postgresql"
 }
 
+model User {
+  id            String    @id
+  name          String
+  email         String
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+
+  // Resume
+  isResumeUploaded Boolean @default(false)
+  // Soft delete
+  isDeleted        Boolean @default(false)
+
+  role UserRole @default(USER)
+
+  interviews Interview[]
+  skills     UserSkill[]
+  files      File[]
+
+
+  @@unique([email])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
 // ENUMS
 
 enum UserRole {
   USER
   ADMIN
 }
-
 
 enum InterviewStatus {
   CREATED
@@ -43,87 +118,8 @@ enum Difficulty {
   HARD
 }
 
-// USER & AUTH
 
-model User {
-  id        String  @id @default(uuid())
-  email     String  @unique
-  name      String
-  image     String?
 
-  emailVerified Boolean @default(false)
-
-  // Resume
-  isResumeUploaded Boolean   @default(false)
-  
-
-  // Soft delete
-  isDeleted Boolean @default(false)
-
-  role UserRole         @default(USER)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  sessions     Session[]
-  accounts     Account[]
-  interviews   Interview[]
-  skills       UserSkill[]
-  files        File[]
-
-  @@map("user")
-}
-
-model Session {
-  id        String   @id
-  expiresAt DateTime
-  token     String   @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  ipAddress String?
-  userAgent String?
-
-  userId String
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("session")
-}
-
-model Account {
-  id         String @id
-  accountId  String
-  providerId String
-  userId     String
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  accessToken           String?
-  refreshToken          String?
-  idToken               String?
-  accessTokenExpiresAt  DateTime?
-  refreshTokenExpiresAt DateTime?
-  scope                 String?
-  password              String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([userId])
-  @@map("account")
-}
-
-model Verification {
-  id         String   @id
-  identifier String
-  value      String
-  expiresAt  DateTime
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  @@index([identifier])
-  @@map("verification")
-}
 
 // SKILLS
 
@@ -149,14 +145,13 @@ model UserSkill {
   @@unique([userId, skillId])
   @@index([userId])
   @@index([skillId])
-
   @@map("user_skill")
 }
 
 // QUESTION BANK
 
 model Question {
-  id         String     @id @default(uuid())
+  id         String         @id @default(uuid())
   content    String
   difficulty Difficulty?
   type       InterviewType?
@@ -174,12 +169,12 @@ model Question {
 // INTERVIEWS
 
 model Interview {
-  id          String @id @default(uuid())
+  id          String  @id @default(uuid())
   title       String
   description String?
 
   userId String
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   status InterviewStatus @default(CREATED)
   type   InterviewType   @default(TECHNICAL)
@@ -232,7 +227,7 @@ model Response {
   aiIdealAnswer String?
 
   durationSeconds Int?
-  submittedAt    DateTime?
+  submittedAt     DateTime?
 
   evaluation Evaluation?
 
@@ -264,17 +259,17 @@ model Evaluation {
   @@map("evaluation")
 }
 
-model File{
+model File {
   id String @id @default(uuid())
 
   userId String
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  url      String
+  url              String
   OriginalFileName String
-  fileType String
-  S3FileName String
-  status  FileStatus @default(STARTING)
+  fileType         String
+  S3FileName       String
+  status           FileStatus @default(STARTING)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

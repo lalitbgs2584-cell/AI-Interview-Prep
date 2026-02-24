@@ -22,7 +22,10 @@
   "engines": {
     "node": ">=20"
   },
-  "workspaces":["packages/*","apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "pnpm": {
     "onlyBuiltDependencies": [
       "@prisma/client",
@@ -33,5 +36,9 @@
       "prisma",
       "sharp"
     ]
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.4.0",
+    "pg": "^8.18.0"
   }
 }

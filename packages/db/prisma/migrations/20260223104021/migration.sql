@@ -1,2 +1,0 @@
--- AlterTable
-ALTER TABLE "file" ALTER COLUMN "S3FileName" DROP NOT NULL;

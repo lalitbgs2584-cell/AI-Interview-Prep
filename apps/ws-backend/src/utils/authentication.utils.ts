@@ -26,7 +26,7 @@ export const getUserIdFromRequest = async (
     const session = await auth.api.getSession({
       headers: normalizeHeaders(req.headers),
     });
-
+    console.log("Session is: ",session)
     return session?.user?.id ?? null;
   } catch (error) {
     console.error("Error fetching session:", error);

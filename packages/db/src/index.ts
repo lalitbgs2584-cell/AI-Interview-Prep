@@ -1,16 +1,18 @@
-  import { PrismaPg } from '@prisma/adapter-pg';
+// apps/ws-backend/lib/prisma-db.ts (or @repo/db/prisma-db)
+import dotenv from "dotenv";
+dotenv.config({ override: true }); // ✅ Force override
+
+import { PrismaNeon } from '@prisma/adapter-neon';
 import { PrismaClient } from '@prisma/client';
 
+console.log('🔍 Prisma DB - DATABASE_URL:', !!process.env.DATABASE_URL ? '✅ loaded' : '❌ missing');
 
-  const adapter = new PrismaPg({
-    connectionString: process.env.DATABASE_URL,
-  });
+if (!process.env.DATABASE_URL) {
+  throw new Error('DATABASE_URL missing in prisma.ts');
+}
 
-  const globalForPrisma = global as unknown as { prisma: PrismaClient };
+const adapter = new PrismaNeon({ connectionString: process.env.DATABASE_URL });
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
 
-  export const prisma =
-    globalForPrisma.prisma || new PrismaClient({
-      adapter,
-    });
-
-  if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+export const prisma = globalForPrisma.prisma ?? new PrismaClient({ adapter });
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;

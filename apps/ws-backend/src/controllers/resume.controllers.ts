@@ -6,7 +6,8 @@ export const resumeController = {
   processResume: async (req: Request, res: Response) => {
     try {
       const userId = await getUserIdFromRequest(req);
-      const { fileId } = req.body;  // Fixed: req.body is object, not function; add type safety
+      console.log(userId)
+      const { fileId,S3fileName } = req.body; 
 
       if (!userId || !fileId) {
         return res.status(400).json({ message: "Missing userId or fileId" });
@@ -15,13 +16,14 @@ export const resumeController = {
       const job = {
         type: "PROCESS_RESUME",
         fileId,
-        userId
+        userId,
+        S3fileName,
+        enqueuedAt: new Date()
       };
 
       //  Queue job (add await if needed)
-      await redisClient.lpush('process_resume', JSON.stringify(job));  
-      await redisClient.quit();  // Close connection
-
+      await redisClient.rpush('process_resume', JSON.stringify(job));  
+      console.log("Job pushed to the queue")
       return res.status(200).json({ message: "Job queued successfully", userId });
     } catch (error) {
       console.error("Error processing resume:", error);

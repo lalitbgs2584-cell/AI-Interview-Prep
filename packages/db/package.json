@@ -5,7 +5,7 @@
   "main": "./dist/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build":"tsc"
+    "build": "tsc"
   },
   "keywords": [],
   "author": "",
@@ -21,10 +21,11 @@
     "./prisma-db": "./dist/index.js"
   },
   "dependencies": {
-    "dotenv": "^17.3.1",
-    "@prisma/adapter-pg": "^7.4.0",
+    "@prisma/adapter-neon": "^7.4.1",
+    "@prisma/adapter-pg": "^7.4.1",
     "@prisma/client": "^7.4.0",
     "better-auth": "^1.4.18",
+    "dotenv": "^17.3.1",
     "pg": "^8.18.0"
   },
   "type": "module"
