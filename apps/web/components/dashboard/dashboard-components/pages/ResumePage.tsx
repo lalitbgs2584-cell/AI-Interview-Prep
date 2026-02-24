@@ -59,13 +59,16 @@ function formatBytes(bytes: number) {
 }
 
 type UploadStatus = "idle" | "uploading" | "done" | "error";
+type ProcessingStatus = "idle" | "processing" | "ready" | "error";
 
 export default function ResumePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [fetchResume, setFetchResume] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isDrag, setIsDrag] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>("idle");
+  const [processingStatus, setProcessingStatus] = useState<ProcessingStatus>("idle");
   const [iframeError, setIframeError] = useState(false);
 
   // ── Revoke blob URL on unmount / change ──────────────────────────────────
@@ -84,19 +87,41 @@ export default function ResumePage() {
         const response = await fetch("/api/get-resume");
         if (!response.ok) return;
         const data = await response.json();
-        console.log("Resume Url :",data.resumeUrl)
+        console.log("Resume Url :", data.resumeUrl);
         if (data.resumeUrl && data.resumeFileName) {
           const fullUrl = data.resumeUrl.startsWith("http")
             ? data.resumeUrl
-            : `https://d13lry3aagw513.cloudfront.net/87a717e2-d9a0-4308-938c-722461afbbb9.pdf`;
+            : `https://d13lry3aagw513.cloudfront.net/${data.resumeUrl}`;
           setPreviewUrl(fullUrl);
           setFile(new File([], data.resumeFileName));
           setUploadStatus("done");
+          // Resume already exists in DB — insights are ready
+          setProcessingStatus("ready");
         }
       } catch (err) {
         console.error("Error loading resume:", err);
       }
     })();
+  }, [fetchResume]);
+
+  // ── WebSocket: listen for processing result ───────────────────────────────
+  useEffect(() => {
+    const socket = getSocket();
+
+    socket.on(
+      "resume_processed",
+      (data: { status: string; fileId: string; text?: string; error?: string }) => {
+        if (data.status === "success") {
+          setProcessingStatus("ready");
+        } else {
+          setProcessingStatus("error");
+        }
+      }
+    );
+
+    return () => {
+      socket.off("resume_processed");
+    };
   }, []);
 
   // ── File helpers ─────────────────────────────────────────────────────────
@@ -105,6 +130,7 @@ export default function ResumePage() {
     if (previewUrl && previewUrl.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
     setFile(f);
     setUploadStatus("idle");
+    setProcessingStatus("idle");
     setIframeError(false);
     setPreviewUrl(f.type === "application/pdf" ? URL.createObjectURL(f) : null);
   }
@@ -114,6 +140,7 @@ export default function ResumePage() {
     setFile(null);
     setPreviewUrl(null);
     setUploadStatus("idle");
+    setProcessingStatus("idle");
     setIframeError(false);
   }
 
@@ -149,46 +176,34 @@ export default function ResumePage() {
 
       // 3. Clean URL (strip presigned query params)
       const fileUrl = url.split("?")[0];
-      console.log(S3fileName)
+      console.log("File URL is : ", fileUrl);
+
       // 4. Save to DB
       const saveRes = await fetch("/api/save-resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileUrl, fileName: file.name, mime, S3fileName }),
+        body: JSON.stringify({ fileUrl, fileName: file.name, mime: mime.split("/")[1], S3fileName }),
       });
       if (!saveRes.ok) throw new Error("Failed to save resume to DB");
       const { fileId } = await saveRes.json();
 
-      // 5. Wait for socket with timeout
-      // const socket = getSocket();
-      // if (!socket.connected) { 
-      //   await new Promise<void>((resolve) => {
-      //     const timer = setTimeout(resolve, 3000);
-      //     socket.once("connect", () => {
-      //       clearTimeout(timer);
-      //       resolve();
-      //     });
-      //   });
-      // }
-
-      // 6. Trigger backend processing
-      const processRes = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/process-resume`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fileId, S3fileName }),
-        }
-      );
-      if (!processRes.ok) {
-        console.warn("Failed to queue processing job — will retry later");
-      }
-
-      // 7. Update UI state (no reload)
+      // 5. Mark upload done immediately — don't block on processing
       setPreviewUrl(fileUrl);
       setIframeError(false);
       setUploadStatus("done");
+      setFetchResume(true);
+
+      // 6. Fire-and-forget — queue the job, WebSocket will deliver the result
+      setProcessingStatus("processing");
+      fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/process-resume`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileId, S3fileName }),
+      }).catch(() => {
+        // Only hits here if the queue request itself fails (network error etc.)
+        setProcessingStatus("error");
+      });
 
     } catch (err) {
       console.error(err);
@@ -201,7 +216,10 @@ export default function ResumePage() {
 
   return (
     <>
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.2; } }
+      `}</style>
 
       {/* ── Top bar ── */}
       <div className="dash-topbar">
@@ -211,7 +229,13 @@ export default function ResumePage() {
         </div>
         {uploadStatus === "done" && (
           <div className="topbar-actions">
-            <button className="resume-action-btn primary">&#9889; Generate Interview Plan</button>
+            <button
+              className="resume-action-btn primary"
+              disabled={processingStatus === "processing"}
+              style={{ opacity: processingStatus === "processing" ? 0.5 : 1 }}
+            >
+              &#9889; Generate Interview Plan
+            </button>
           </div>
         )}
       </div>
@@ -400,9 +424,19 @@ export default function ResumePage() {
                     Resume uploaded successfully
                   </div>
                   <div style={{ fontFamily: "var(--ff-mono)", fontSize: "0.68rem", color: "var(--muted)" }}>
-                    AI analysis is ready below
+                    {processingStatus === "processing"
+                      ? "AI is analyzing your resume..."
+                      : processingStatus === "ready"
+                      ? "AI analysis is ready below"
+                      : processingStatus === "error"
+                      ? "Analysis failed — you can still continue"
+                      : "AI analysis is ready below"}
                   </div>
                 </div>
+                {/* Inline spinner while processing */}
+                {processingStatus === "processing" && (
+                  <span style={{ ...spinnerStyle, marginLeft: "auto" }} />
+                )}
               </div>
             )}
 
@@ -419,53 +453,130 @@ export default function ResumePage() {
                 <div className="panel-title">AI Resume Insights</div>
                 <div className="panel-sub">Parsed and analyzed</div>
               </div>
-              <span className="tag tag-accent">AI Powered</span>
+              {/* Status tag */}
+              {processingStatus === "processing" && (
+                <span className="tag tag-amber">⏳ Analyzing...</span>
+              )}
+              {processingStatus === "ready" && (
+                <span className="tag tag-accent">✅ AI Powered</span>
+              )}
+              {processingStatus === "error" && (
+                <span className="tag tag-rose">❌ Analysis failed</span>
+              )}
             </div>
-            <div className="resume-section-grid">
-              {insights.map((item) => (
-                <div key={item.label} className="resume-insight-item">
-                  <span
-                    className={`stat-card-dot ${item.dot}`}
-                    style={{ marginTop: "0.45rem", flexShrink: 0, width: 7, height: 7, borderRadius: "50%", display: "inline-block" }}
+
+            {/* Skeleton while processing */}
+            {processingStatus === "processing" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", padding: "0.5rem 0" }}>
+                {[...Array(4)].map((_, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      height: 48,
+                      borderRadius: "var(--r-lg)",
+                      background: "var(--card-2)",
+                      animation: "pulse 1.5s ease-in-out infinite",
+                      animationDelay: `${i * 0.1}s`,
+                    }}
                   />
-                  <div>
-                    <div className="resume-insight-label">{item.label}</div>
-                    <div className="resume-insight-val">{item.val}</div>
+                ))}
+              </div>
+            )}
+
+            {/* Insights grid when ready */}
+            {processingStatus === "ready" && (
+              <div className="resume-section-grid">
+                {insights.map((item) => (
+                  <div key={item.label} className="resume-insight-item">
+                    <span
+                      className={`stat-card-dot ${item.dot}`}
+                      style={{ marginTop: "0.45rem", flexShrink: 0, width: 7, height: 7, borderRadius: "50%", display: "inline-block" }}
+                    />
+                    <div>
+                      <div className="resume-insight-label">{item.label}</div>
+                      <div className="resume-insight-val">{item.val}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Error state */}
+            {processingStatus === "error" && (
+              <div style={{
+                padding: "1.25rem",
+                borderRadius: "var(--r-lg)",
+                background: "rgba(247,106,106,0.06)",
+                border: "1px solid rgba(247,106,106,0.2)",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.75rem",
+              }}>
+                <span style={{ fontSize: "1.25rem" }}>⚠️</span>
+                <div>
+                  <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--rose)", marginBottom: "0.2rem" }}>
+                    Analysis failed
+                  </div>
+                  <div style={{ fontSize: "0.78rem", color: "var(--text-3)" }}>
+                    We couldn&apos;t analyze your resume. You can still continue or try re-uploading.
                   </div>
                 </div>
-              ))}
-            </div>
+              </div>
+            )}
           </div>
 
-          <div className="panel">
-            <div className="panel-header">
-              <div>
-                <div className="panel-title">Improvement Suggestions</div>
-                <div className="panel-sub">To strengthen your resume</div>
+          {/* Suggestions — only when ready */}
+          {processingStatus === "ready" && (
+            <div className="panel">
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Improvement Suggestions</div>
+                  <div className="panel-sub">To strengthen your resume</div>
+                </div>
+              </div>
+              <div className="skill-list">
+                {suggestions.map((s, i) => (
+                  <div key={i} className="session-row" style={{ cursor: "default" }}>
+                    <div className="session-row-left">
+                      <span className={`tag ${priorityClass(s.priority)}`}>{s.priority}</span>
+                      <span style={{ fontSize: "0.85rem", color: "var(--text-2)" }}>{s.text}</span>
+                    </div>
+                    <button className="session-replay-btn">Fix &#8594;</button>
+                  </div>
+                ))}
               </div>
             </div>
-            <div className="skill-list">
-              {suggestions.map((s, i) => (
-                <div key={i} className="session-row" style={{ cursor: "default" }}>
-                  <div className="session-row-left">
-                    <span className={`tag ${priorityClass(s.priority)}`}>{s.priority}</span>
-                    <span style={{ fontSize: "0.85rem", color: "var(--text-2)" }}>{s.text}</span>
-                  </div>
-                  <button className="session-replay-btn">Fix &#8594;</button>
-                </div>
-              ))}
-            </div>
-          </div>
+          )}
 
           <div className="panel">
             <div className="panel-header">
               <div className="panel-title">Next Steps</div>
             </div>
             <div className="resume-action-row">
-              <button className="resume-action-btn primary">&#9889; Generate Interview Plan</button>
-              <button className="resume-action-btn">&#8681; Download Analysis</button>
-              <button className="resume-action-btn" onClick={removeFile}>&#8635; Re-upload Resume</button>
-              <button className="resume-action-btn">&#127919; Target a Role</button>
+              <button
+                className="resume-action-btn primary"
+                disabled={processingStatus === "processing"}
+                style={{ opacity: processingStatus === "processing" ? 0.5 : 1 }}
+              >
+                &#9889; Generate Interview Plan
+              </button>
+              <button
+                className="resume-action-btn"
+                disabled={processingStatus === "processing"}
+                style={{ opacity: processingStatus === "processing" ? 0.5 : 1 }}
+              >
+                &#8681; Download Analysis
+              </button>
+              <button className="resume-action-btn" onClick={removeFile}>
+                &#8635; Re-upload Resume
+              </button>
+              <button
+                className="resume-action-btn"
+                disabled={processingStatus === "processing"}
+                style={{ opacity: processingStatus === "processing" ? 0.5 : 1 }}
+              >
+                &#127919; Target a Role
+              </button>
             </div>
           </div>
         </>

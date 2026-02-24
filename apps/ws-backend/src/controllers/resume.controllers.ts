@@ -1,16 +1,22 @@
 import { Request, Response } from "express";
-import { getUserIdFromRequest } from "../utils/authentication.utils.js";
 import { redisClient } from "../config/redis.config.js";
+import { AuthenticatedRequest } from "../types/auth-request.js";
 
 export const resumeController = {
-  processResume: async (req: Request, res: Response) => {
+  processResume: async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = await getUserIdFromRequest(req);
-      console.log(userId)
-      const { fileId,S3fileName } = req.body; 
+      const session = req.session;
 
-      if (!userId || !fileId) {
-        return res.status(400).json({ message: "Missing userId or fileId" });
+      if (!session?.user?.id) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const userId = session.user.id;
+
+      const { fileId, S3fileName } = req.body;
+
+      if (!fileId || !S3fileName) {
+        return res.status(400).json({ message: "Missing fileId or S3fileName" });
       }
 
       const job = {
@@ -18,27 +24,33 @@ export const resumeController = {
         fileId,
         userId,
         S3fileName,
-        enqueuedAt: new Date()
+        enqueuedAt: new Date(),
       };
 
-      //  Queue job (add await if needed)
-      await redisClient.rpush('process_resume', JSON.stringify(job));  
-      console.log("Job pushed to the queue")
-      return res.status(200).json({ message: "Job queued successfully", userId });
+      await redisClient.rpush("process_resume", JSON.stringify(job));
+
+      console.log("✅ Job pushed to queue");
+
+      return res.status(200).json({
+        message: "Job queued successfully",
+      });
     } catch (error) {
       console.error("Error processing resume:", error);
       return res.status(500).json({ message: "Failed to process resume" });
     }
   },
-  uploadResume: async (req: Request, res: Response) => {
-    try {
-      const userId = await getUserIdFromRequest(req);
 
-      if (!userId) {
+  uploadResume: async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const session = req.session;
+
+      if (!session?.user?.id) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      // TODO: upload logic
+      const userId = session.user.id;
+
+      // Upload logic here
 
       return res.status(200).json({ message: "Resume uploaded" });
     } catch (error) {
@@ -47,15 +59,17 @@ export const resumeController = {
     }
   },
 
-  deleteResume: async (req: Request, res: Response) => {
+  deleteResume: async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = await getUserIdFromRequest(req);
+      const session = req.session;
 
-      if (!userId) {
+      if (!session?.user?.id) {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      // TODO: delete logic
+      const userId = session.user.id;
+
+      // Delete logic here
 
       return res.status(200).json({ message: "Resume deleted" });
     } catch (error) {

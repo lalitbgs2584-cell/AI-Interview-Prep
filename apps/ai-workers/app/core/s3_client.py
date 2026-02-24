@@ -1,10 +1,16 @@
-import boto3
+import pypdf
+import docx
+import requests
 from io import BytesIO
+from config import settings
 
-s3 = boto3.client('s3')
+def download_resume(key: str) -> BytesIO:
+    url = f"{settings.CDN_BASE_URL}/{key}"
+    response = requests.get(url)
+    response.raise_for_status()
+    return BytesIO(response.content)
 
-def download_resume(bucket: str, key: str) -> BytesIO:
-    response = s3.get_object(Bucket=bucket, Key=key)
-    return BytesIO(response['Body'].read())
 
-# resume_bytes = download_resume('my-bucket', 'resumes/john_doe.pdf')
+
+# usage
+# text = read_resume("resumes/john_doe.pdf")

@@ -6,9 +6,9 @@ import { Server } from "socket.io";
 import http from "http";
 import dotenv from "dotenv";
 import routes from "./routes/resume.routes.js";
-import { errorMiddleware } from "./middlewares/error.middlewares.js";
+import {  errorMiddleware } from "./middlewares/error.middlewares.js";
 import { auth } from "@repo/auth/server";
-import { fromNodeHeaders, toNodeHandler } from "better-auth/node";
+import {  toNodeHandler } from "better-auth/node";
 import { prisma } from "@repo/db/prisma-db";
 
 // Load env FIRST
@@ -61,16 +61,6 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-app.get("/api/me", async (req, res) => {
-  try {
-    const session = await auth.api.getSession({
-      headers: fromNodeHeaders(req.headers),
-    });
-    return res.json(session);
-  } catch (error) {
-    return res.status(401).json({ error: "No session" });
-  }
-});
 
 /* ---------------------------
    Other API Routes
