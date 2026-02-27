@@ -41,3 +41,5 @@ venv/
 env/
 __pycache__/
 neo4j_data/
+qdrant_data/
+valkey_data/
