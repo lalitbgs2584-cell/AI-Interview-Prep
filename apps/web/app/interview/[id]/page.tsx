@@ -1,8 +1,10 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 import "../style.css";
+import { useRouter } from "next/navigation";
+import { useSpeechToText } from "@/lib/hooks/useSpeechHook";
 
 // ── Mock chat history ──────────────────────────────────────
 const initialMessages = [
@@ -70,7 +72,7 @@ function WaveBars({ active }: { active: boolean }) {
 
 // ── Main component ─────────────────────────────────────────
 export default function InterviewPage() {
- 
+  const router = useRouter()
   const [messages, setMessages] = useState(initialMessages);
   const [input, setInput] = useState("");
   const [micOn, setMicOn] = useState(true);
@@ -79,6 +81,147 @@ export default function InterviewPage() {
   const [sessionRunning, setSessionRunning] = useState(true);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const timer = useTimer(sessionRunning);
+  const userVideoRef = useRef<HTMLVideoElement>(null);
+  const aiAudioRef = useRef<HTMLAudioElement>(null);
+  const [micPermission, setMicPermission] = useState(false)
+  const [camPermission, setCamPermission] = useState(false)
+  const userStreamRef = useRef<MediaStream | null>(null);
+  const reviewRecorderRef = useRef<MediaRecorder | null>(null);
+  const cleanRecorderRef = useRef<MediaRecorder | null>(null);
+  const reviewChunksRef = useRef<BlobPart[]>([]);
+  const cleanChunksRef = useRef<BlobPart[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const isRecordingRef = useRef(false);
+  const { transcript, isListening, startListening, stopListening } = useSpeechToText();
+
+  // ✅ FIXED: Capture stream reference
+  useEffect(() => {
+    const requestMediaAccess = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: true,
+        });
+
+        userStreamRef.current = stream;
+        setMicPermission(true);
+        setCamPermission(true);
+
+      } catch (err) {
+        console.error("Permission denied ❌", err);
+      }
+    };
+
+    requestMediaAccess();
+  }, []);
+
+  useEffect(() => {
+    if (userVideoRef.current && userStreamRef.current) {
+      userVideoRef.current.srcObject = userStreamRef.current;
+    }
+  }, [micPermission, camOn]);
+
+  // ✅ FIXED: Proper recording with guard
+  const startRecording = useCallback(() => {
+    if (!userStreamRef.current || isRecordingRef.current) return;
+
+    try {
+      isRecordingRef.current = true;
+
+      const stream = userStreamRef.current;
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+
+      // 🎤 User mic source
+      const userMicSource = audioContext.createMediaStreamSource(stream);
+
+      // 🤖 AI audio source (VERY IMPORTANT)
+      let aiSource: MediaElementAudioSourceNode | null = null;
+
+      if (aiAudioRef.current) {
+        aiSource = audioContext.createMediaElementSource(aiAudioRef.current);
+      }
+
+      const mixedDestination = audioContext.createMediaStreamDestination();
+
+      // Connect user mic
+      userMicSource.connect(mixedDestination);
+
+      // Connect AI audio if exists
+      if (aiSource) {
+        aiSource.connect(mixedDestination);
+      }
+
+      // Optional: allow hearing audio normally
+      userMicSource.connect(audioContext.destination);
+      if (aiSource) aiSource.connect(audioContext.destination);
+
+      const reviewVideoStream = new MediaStream([
+        ...stream.getVideoTracks(),
+        ...mixedDestination.stream.getAudioTracks(),
+      ]);
+
+      const cleanAudioStream = new MediaStream(stream.getAudioTracks());
+
+      const reviewRecorder = new MediaRecorder(reviewVideoStream);
+      const cleanRecorder = new MediaRecorder(cleanAudioStream);
+
+      reviewRecorderRef.current = reviewRecorder;
+      cleanRecorderRef.current = cleanRecorder;
+      reviewChunksRef.current = [];
+      cleanChunksRef.current = [];
+
+      reviewRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) reviewChunksRef.current.push(e.data);
+      };
+
+      cleanRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) cleanChunksRef.current.push(e.data);
+      };
+
+      reviewRecorder.onstop = () => {
+        const reviewBlob = new Blob(reviewChunksRef.current, { type: "video/webm" });
+        const url = URL.createObjectURL(reviewBlob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "interview-review.webm";
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      cleanRecorder.onstop = () => {
+        const cleanBlob = new Blob(cleanChunksRef.current, { type: "audio/webm" });
+        console.log("Clean audio ready", cleanBlob);
+      };
+
+      reviewRecorder.start();
+      cleanRecorder.start();
+
+    } catch (error) {
+      console.error("Recording failed:", error);
+      isRecordingRef.current = false;
+    }
+  }, []);
+
+  // ✅ FIXED: Proper stop recording
+  const stopRecording = useCallback(() => {
+    if (!isRecordingRef.current) return;
+
+    reviewRecorderRef.current?.stop();
+    cleanRecorderRef.current?.stop();
+    isRecordingRef.current = false;
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (micPermission && camPermission && !isRecordingRef.current) {
+      startRecording();
+    }
+  }, [micPermission, camPermission, startRecording]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -92,7 +235,6 @@ export default function InterviewPage() {
     setMessages((prev) => [...prev, { id: Date.now(), role: "user", text, time: now }]);
     setInput("");
 
-    // Simulate AI response
     setAiSpeaking(true);
     setTimeout(() => {
       setMessages((prev) => [
@@ -124,7 +266,7 @@ export default function InterviewPage() {
         {/* ════ TOP BAR ════ */}
         <header className="interview-topbar">
           <div className="topbar-left">
-            <Link href="/dashboard" className="topbar-logo">Prep<span>AI</span></Link>
+            <Link href="/dashboard" className="topbar-logo">Interview<span>AI</span></Link>
             <div className="topbar-divider" />
             <div className="topbar-session-info">
               <span className="tag tag-accent">System Design</span>
@@ -147,7 +289,11 @@ export default function InterviewPage() {
               <span className="score-preview-label">Score</span>
               <span className="score-preview-value score-high">78</span>
             </div>
-            <button className="btn-end-session">End Session</button>
+            <button className="btn-end-session"
+              onClick={() => {
+                setSessionRunning(false);
+                stopRecording();
+              }}>End Session</button>
           </div>
         </header>
 
@@ -160,12 +306,12 @@ export default function InterviewPage() {
             {/* AI interviewer — large */}
             <div className={`vid-card vid-ai${aiSpeaking ? " speaking" : ""}`}>
               <div className="vid-inner">
-                {/* Placeholder video with animated gradient */}
                 <div className="vid-placeholder vid-placeholder-ai">
                   <div className="vid-avatar-ring">
-                    <div className="vid-avatar">AI</div>
+                    <div className="vid-avatar">
+                      <audio ref={aiAudioRef}></audio>
+                    </div>
                   </div>
-                  {/* Animated circuit lines */}
                   <div className="vid-circuit">
                     {[...Array(6)].map((_, i) => (
                       <div key={i} className="circuit-line" style={{ animationDelay: `${i * 0.4}s` }} />
@@ -173,7 +319,6 @@ export default function InterviewPage() {
                   </div>
                 </div>
 
-                {/* Speaking indicator */}
                 <div className="vid-speaking-bar">
                   <WaveBars active={aiSpeaking} />
                   <span className="vid-speaking-label">
@@ -182,7 +327,6 @@ export default function InterviewPage() {
                 </div>
               </div>
 
-              {/* Name tag */}
               <div className="vid-nametag">
                 <span className="dot-accent-static" />
                 <span className="vid-name">PrepAI Interviewer</span>
@@ -190,13 +334,20 @@ export default function InterviewPage() {
               </div>
             </div>
 
-            {/* User — smaller pip */}
+            {/* ✅ FIXED: Proper video structure */}
             <div className={`vid-card vid-user${!camOn ? " cam-off" : ""}`}>
               <div className="vid-inner">
-                {camOn ? (
+                {camOn && micPermission ? (
                   <div className="vid-placeholder vid-placeholder-user">
-                    <div className="vid-avatar vid-avatar-user">AR</div>
-                    {/* Bokeh dots */}
+                    <div className="vid-avatar-user">
+                      <video
+                        ref={userVideoRef}
+                        autoPlay
+                        muted
+                        playsInline
+                      />
+                    </div>
+                    {/* Bokeh dots - behind video */}
                     {[...Array(8)].map((_, i) => (
                       <div
                         key={i}
@@ -205,21 +356,21 @@ export default function InterviewPage() {
                           left: `${10 + i * 11}%`,
                           top: `${20 + (i % 3) * 25}%`,
                           animationDelay: `${i * 0.3}s`,
+                          zIndex: 0
                         }}
                       />
                     ))}
                   </div>
                 ) : (
-                  <div className="cam-off-state">
+                  <div className="cam-off-state h-full! flex! items-center justify-center">
                     <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-                      <path d="M3 3l18 18M10.5 10.5A2 2 0 0013.5 13.5M9 5h7l2 2h3v12H9m-5-5V7h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                      <path d="M3 3l18 18M10.5 10.5A2 2 0 0013.5 13.5M9 5h7l2 2h3v12H9m-5-5V7h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
                     </svg>
                     <span>Camera off</span>
                   </div>
                 )}
               </div>
 
-              {/* Name tag */}
               <div className="vid-nametag">
                 <span className="dot-accent-static dot-user" />
                 <span className="vid-name">Alex Rivera</span>
@@ -227,22 +378,31 @@ export default function InterviewPage() {
               </div>
             </div>
 
+
             {/* ── Controls bar ── */}
             <div className="controls-bar">
               <button
                 className={`ctrl-btn${!micOn ? " ctrl-off" : ""}`}
-                onClick={() => setMicOn((v) => !v)}
+                onClick={() => {
+                  setMicOn((v) => !v);
+                  if (micOn) {
+                    startListening(); // Start transcription when mic ON
+                    console.log(transcript.trim())
+                  } else {
+                    stopListening();  // Stop when mic OFF
+                  }
+                }}
                 title={micOn ? "Mute mic" : "Unmute mic"}
               >
                 {micOn ? (
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <rect x="9" y="2" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="1.8"/>
-                    <path d="M5 10a7 7 0 0014 0M12 19v3M9 22h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                    <rect x="9" y="2" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="1.8" />
+                    <path d="M5 10a7 7 0 0014 0M12 19v3M9 22h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                   </svg>
                 ) : (
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <path d="M3 3l18 18M9 9v5a3 3 0 005.12 2.12M15 9.34V5a3 3 0 00-5.94-.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-                    <path d="M17 16.95A7 7 0 015 10M12 19v3M9 22h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                    <path d="M3 3l18 18M9 9v5a3 3 0 005.12 2.12M15 9.34V5a3 3 0 00-5.94-.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                    <path d="M17 16.95A7 7 0 015 10M12 19v3M9 22h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                   </svg>
                 )}
                 <span>{micOn ? "Mute" : "Unmute"}</span>
@@ -255,38 +415,20 @@ export default function InterviewPage() {
               >
                 {camOn ? (
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                    <path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
                 ) : (
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <path d="M3 3l18 18M10.5 8.5H13a2 2 0 012 2v.5m1 4.47V16a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h.5M15 10l4.553-2.276A1 1 0 0121 8.723v6.554" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                    <path d="M3 3l18 18M10.5 8.5H13a2 2 0 012 2v.5m1 4.47V16a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h.5M15 10l4.553-2.276A1 1 0 0121 8.723v6.554" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                   </svg>
                 )}
                 <span>{camOn ? "Camera" : "No cam"}</span>
               </button>
 
-              <button className="ctrl-btn ctrl-btn-ghost">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                  <rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="1.8"/>
-                  <path d="M8 21h8M12 17v4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-                </svg>
-                <span>Share</span>
-              </button>
-
-              <button className="ctrl-btn ctrl-btn-ghost">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8"/>
-                  <path d="M12 2v3M12 19v3M2 12h3M19 12h3M5.636 5.636l2.121 2.121M16.243 16.243l2.121 2.121M5.636 18.364l2.121-2.121M16.243 7.757l2.121-2.121" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-                </svg>
-                <span>Settings</span>
-              </button>
-
-              <div className="ctrl-spacer" />
-
               <button className="ctrl-btn ctrl-btn-end">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                  <path d="M6.827 6.175A8 8 0 0117.173 17.173M12 6v6l4 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
-                  <path d="M3.05 11a9 9 0 1017.9 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                  <path d="M6.827 6.175A8 8 0 0117.173 17.173M12 6v6l4 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                  <path d="M3.05 11a9 9 0 1017.9 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                 </svg>
                 <span>End</span>
               </button>
@@ -323,7 +465,6 @@ export default function InterviewPage() {
                 </div>
               ))}
 
-              {/* AI typing indicator */}
               {aiSpeaking && (
                 <div className="chat-msg chat-msg-ai">
                   <div className="chat-msg-avatar chat-msg-avatar-ai">AI</div>
@@ -340,7 +481,6 @@ export default function InterviewPage() {
               <div ref={chatEndRef} />
             </div>
 
-            {/* Input */}
             <div className="chat-input-wrap">
               <textarea
                 className="chat-input"
@@ -357,7 +497,7 @@ export default function InterviewPage() {
                 aria-label="Send"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                  <path d="M22 2L11 13M22 2L15 22 11 13 2 9l20-7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M22 2L11 13M22 2L15 22 11 13 2 9l20-7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </button>
             </div>

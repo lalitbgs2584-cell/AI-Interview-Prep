@@ -17,8 +17,7 @@ type Page = "dashboard" | "interviews" | "progress" | "skills" | "resume" | "his
 interface DashboardAppProps {
   /** Optional user from your auth layer; falls back to mock */
   user?: { name?: string | null; avatar?: string | null; role?: string | null };
-  /** Optional: called when user clicks "+ New Interview" */
-  onNewInterview?: () => void;
+  
 }
 
 // ── Nav config ────────────────────────────────────────────────
@@ -37,7 +36,7 @@ const AI_TIP = {
 };
 
 // ── Component ─────────────────────────────────────────────────
-export default function DashboardApp({ user, onNewInterview }: DashboardAppProps) {
+export default function DashboardApp({ user }: DashboardAppProps) {
   const [activePage, setActivePage]   = useState<Page>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
 

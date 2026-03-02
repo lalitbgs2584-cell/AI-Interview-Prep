@@ -5,4 +5,5 @@ export { default as InterviewsPage } from "./dashboard-components/pages/Intervie
 export { default as ProgressPage }   from "./dashboard-components/pages/ProgressPage";
 export { default as ResumePage }     from "./dashboard-components/pages/ResumePage";
 export { default as SkillsPage }     from "./dashboard-components/pages/SkillsPage";
+export { default as WaitingRoom }     from "./dashboard-components/pages/WaitingRoom";
 export { default as OverviewPage }   from "./OverviewPage";

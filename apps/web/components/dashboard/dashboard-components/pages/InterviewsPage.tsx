@@ -1,6 +1,8 @@
 "use client";
 
-import { SessionRow } from "../../OverviewPage";
+import { useState } from "react";
+import CustomSessionModal from "./CustomSessionModal";
+import { redirect } from "next/navigation";
 
 const interviewTypes = [
   { icon: "⬡", name: "System Design", desc: "Practice designing scalable systems — URL shorteners, rate limiters, chat apps and more.", tag: "Popular", tagClass: "tag-accent", count: "12 sessions done" },
@@ -17,6 +19,8 @@ const upcomingSessions = [
 ];
 
 export default function InterviewsPage() {
+  const [modalOpen, setModalOpen] = useState(false);
+
   return (
     <>
       {/* Top bar */}
@@ -26,7 +30,7 @@ export default function InterviewsPage() {
           <div className="dash-date">Choose a category and begin practicing</div>
         </div>
         <div className="topbar-actions">
-          <button className="btn-new-session">+ Custom Session</button>
+          <button className="btn-new-session" onClick={() => setModalOpen(true)}>+ Custom Session</button>
         </div>
       </div>
 
@@ -37,7 +41,7 @@ export default function InterviewsPage() {
         </div>
         <div className="interview-type-grid">
           {interviewTypes.map((t) => (
-            <button key={t.name} className="interview-type-card">
+            <button key={t.name} className="interview-type-card" onClick={() => { redirect("/waiting-room") }}>
               <span className="interview-type-icon">{t.icon}</span>
               <div className="interview-type-meta">
                 <span className={`tag ${t.tagClass}`}>{t.tag}</span>
@@ -74,6 +78,8 @@ export default function InterviewsPage() {
           ))}
         </div>
       </div>
+
+      <CustomSessionModal isOpen={modalOpen} onClose={() => setModalOpen(false)} />
     </>
   );
 }

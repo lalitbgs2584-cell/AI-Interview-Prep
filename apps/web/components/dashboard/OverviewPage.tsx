@@ -2,7 +2,7 @@
 
 import { authClient } from "@repo/auth/client";
 import { redirect } from "next/navigation";
-import { useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 
 const stats = [
   { label: "Sessions Done", value: "24", unit: "total", dot: "dot-accent", delta: "+3 this week" },
@@ -77,6 +77,11 @@ export default function OverviewPage({ userName, streak, onNavigate }: {
     await authClient.signOut()
     redirect("/login")
   }
+
+  const handleNewInterview = async (e:React.FormEvent) => {
+    e.preventDefault()
+    redirect(`/interview/sdlf;kjd`)
+  }
   return (
     <>
       {/* ── Top bar ── */}
@@ -88,7 +93,9 @@ export default function OverviewPage({ userName, streak, onNavigate }: {
           <div className="dash-date">{dateStr} · {streak}-day streak 🔥</div>
         </div>
         <div className="topbar-actions">
-          <button className="btn-new-session">+ New Interview</button>
+          <button className="btn-new-session"
+          onClick={(e)=>{handleNewInterview(e)}}
+          >+ New Interview</button>
           <button
             onClick={handleLogout}
             disabled={isLoggingOut}

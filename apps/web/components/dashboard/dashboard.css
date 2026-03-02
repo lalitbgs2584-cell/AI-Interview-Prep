@@ -583,3 +583,304 @@ body {
   }
   .noise { display: none; }
 }
+
+/* ══════════════════════════════════════
+   WAITING ROOM
+══════════════════════════════════════ */
+
+.wr-root {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 200;
+  transition: opacity var(--dur-slow) var(--ease-out), transform var(--dur-slow) var(--ease-out);
+}
+
+.wr-exit {
+  opacity: 0;
+  transform: scale(1.04);
+  pointer-events: none;
+}
+
+/* ── Ambient Orbs ── */
+.wr-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  pointer-events: none;
+  animation: orbFloat 8s ease-in-out infinite;
+}
+.wr-orb-1 {
+  width: 500px; height: 500px;
+  background: radial-gradient(circle, rgba(255,92,53,0.12) 0%, transparent 70%);
+  top: -100px; left: -100px;
+  animation-delay: 0s;
+}
+.wr-orb-2 {
+  width: 400px; height: 400px;
+  background: radial-gradient(circle, rgba(167,139,250,0.08) 0%, transparent 70%);
+  bottom: -80px; right: -80px;
+  animation-delay: -3s;
+}
+.wr-orb-3 {
+  width: 300px; height: 300px;
+  background: radial-gradient(circle, rgba(255,92,53,0.07) 0%, transparent 70%);
+  top: 50%; left: 60%;
+  animation-delay: -5s;
+}
+
+@keyframes orbFloat {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%       { transform: translate(30px, -20px) scale(1.05); }
+  66%       { transform: translate(-20px, 15px) scale(0.95); }
+}
+
+/* ── Card ── */
+.wr-card {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-xl);
+  padding: 3rem 2.5rem;
+  width: 480px;
+  max-width: 95vw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  box-shadow: var(--shadow-md), 0 0 80px rgba(0,0,0,0.5);
+  animation: fadeUp var(--dur-slow) var(--ease-snap) both;
+}
+
+.wr-card::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+}
+
+/* ── Badge ── */
+.wr-badge {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.3rem 0.9rem;
+  border-radius: var(--r-full);
+  border: 1px solid rgba(255,92,53,0.25);
+  background: rgba(255,92,53,0.07);
+  font-family: var(--ff-mono); font-size: 0.68rem;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent-2);
+}
+
+.wr-badge-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+  animation: dotPulse 1.5s ease infinite;
+}
+
+/* ── Title ── */
+.wr-title {
+  font-family: var(--ff-display);
+  font-size: clamp(1.2rem, 3vw, 1.6rem);
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: -0.04em;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.wr-type {
+  font-family: var(--ff-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: -1rem;
+}
+
+/* ── Ring ── */
+.wr-ring-wrap {
+  position: relative;
+  width: 120px; height: 120px;
+}
+
+.wr-ring {
+  width: 100%; height: 100%;
+  transform: rotate(-90deg);
+}
+
+.wr-ring-track {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 6;
+}
+
+.wr-ring-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 6;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.8s var(--ease-snap);
+  filter: drop-shadow(0 0 8px rgba(255,92,53,0.5));
+}
+
+.wr-ring-done .wr-ring-fill {
+  stroke: var(--positive);
+  filter: drop-shadow(0 0 10px rgba(226,168,75,0.6));
+}
+
+.wr-ring-inner {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.wr-ring-percent {
+  font-family: var(--ff-display);
+  font-size: 1.4rem; font-weight: 800;
+  color: var(--text);
+}
+
+.wr-ring-check {
+  font-size: 1.8rem;
+  color: var(--positive);
+  animation: fadeUp var(--dur-base) var(--ease-spring) both;
+}
+
+/* ── Steps ── */
+.wr-steps {
+  display: flex; flex-direction: column; gap: 0.6rem;
+  width: 100%;
+}
+
+.wr-step {
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  background: transparent;
+  opacity: 0.3;
+  transition: all var(--dur-base) var(--ease-out);
+  position: relative;
+}
+
+.wr-step.done {
+  opacity: 0.6;
+}
+
+.wr-step.active {
+  opacity: 1;
+  background: var(--accent-low);
+  border-color: rgba(255,92,53,0.2);
+}
+
+.wr-step-icon {
+  font-size: 0.85rem;
+  color: var(--text-3);
+  width: 16px; text-align: center; flex-shrink: 0;
+}
+
+.wr-step.done  .wr-step-icon { color: var(--positive); }
+.wr-step.active .wr-step-icon { color: var(--accent); }
+
+.wr-step-label {
+  font-family: var(--ff-mono);
+  font-size: 0.75rem;
+  color: var(--text-2);
+  letter-spacing: 0.02em;
+}
+
+.wr-step.active .wr-step-label { color: var(--text); }
+
+.wr-step-pulse {
+  position: absolute; right: 0.85rem;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+  animation: dotPulse 1s ease infinite;
+}
+
+/* ── Enter Button ── */
+.wr-enter-btn {
+  width: 100%;
+  padding: 0.85rem 1.5rem;
+  border-radius: var(--r-full);
+  border: none;
+  font-family: var(--ff-body);
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 0.6rem;
+  transition: all var(--dur-base) var(--ease-spring);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Waiting state — gray, disabled */
+.wr-enter-btn.waiting {
+  background: var(--card-2);
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  cursor: not-allowed;
+}
+
+/* Ready state — orange, glowing */
+.wr-enter-btn.ready {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-3) 100%);
+  color: #fff;
+  box-shadow: var(--shadow-accent), 0 0 40px rgba(255,92,53,0.3);
+  animation: readyPulse 2s ease infinite;
+}
+
+.wr-enter-btn.ready:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 0 60px rgba(255,92,53,0.5), var(--shadow-md);
+}
+
+.wr-enter-btn.ready::after {
+  content: '';
+  position: absolute; top: 0; left: -100%; width: 60%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+  animation: shimmer 2.5s ease infinite;
+}
+
+@keyframes readyPulse {
+  0%, 100% { box-shadow: var(--shadow-accent), 0 0 30px rgba(255,92,53,0.25); }
+  50%       { box-shadow: var(--shadow-accent), 0 0 55px rgba(255,92,53,0.45); }
+}
+
+@keyframes shimmer {
+  0%   { left: -100%; }
+  100% { left: 200%; }
+}
+
+/* ── Button internals ── */
+.wr-btn-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: rgba(255,255,255,0.8);
+  animation: dotPulse 1s ease infinite;
+}
+
+.wr-btn-spinner {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--text-3);
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Ready hint ── */
+.wr-ready-hint {
+  font-family: var(--ff-mono);
+  font-size: 0.7rem;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  animation: fadeUp var(--dur-base) var(--ease-snap) both;
+  margin-top: -0.75rem;
+}
+
+/* ── Responsive ── */
+@media (max-width: 520px) {
+  .wr-card { padding: 2rem 1.5rem; }
+}
