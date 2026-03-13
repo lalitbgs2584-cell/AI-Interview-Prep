@@ -48,19 +48,12 @@ export default function WaitingRoom() {
   useEffect(() => {
     const socket = getSocket();
 
-    socket.on("connect",       () => console.log("✅ connected", socket.id));
-    socket.on("connect_error", (err) => console.log("❌ connect error", err.message));
-
-    socket.emit("join_interview",  { interviewId });
-    socket.emit("interview_ready", { interviewId });
-
-    socket.on("interview:question", (data) => {
+    const handleQuestion = (data: any) => {
       if (questionReceived.current) return;
       questionReceived.current = true;
 
       useInterviewStore.getState().setCurrentQuestion(data);
 
-      // Complete all steps → show ready → navigate
       setCurrentStep(STEPS.length + 1);
       setReady(true);
 
@@ -68,12 +61,26 @@ export default function WaitingRoom() {
         setExiting(true);
         setTimeout(() => router.push(`/interview/${interviewId}`), 600);
       }, 1200);
-    });
+    };
+
+    const joinInterview = () => {
+      console.log("✅ connected", socket.id);
+      socket.emit("join_interview", { interviewId });
+    };
+
+    // If already connected (singleton socket reused from prev page), emit immediately
+    if (socket.connected) {
+      socket.emit("join_interview", { interviewId });
+    }
+
+    socket.on("connect", joinInterview);
+    socket.on("connect_error", (err) => console.log("❌ connect error", err.message));
+    socket.on("interview:question", handleQuestion);
 
     return () => {
-      socket.off("interview:question");
-      socket.off("connect");
+      socket.off("connect", joinInterview);
       socket.off("connect_error");
+      socket.off("interview:question", handleQuestion);
     };
   }, [interviewId, router]);
 

@@ -1,4 +1,4 @@
-import { subscriber } from "../config/redis.config.js";
+import { redisClient, subscriber } from "../config/redis.config.js";
 import { io } from "../index.js";
 
 // Subscribe to all interview event channels
@@ -67,19 +67,19 @@ subscriber.on("pmessage", async (pattern: string, channel: string, message: stri
         // -----------------------------------------------------------------
         case "question": {
             const { index, difficulty, question } = data as QuestionEvent;
-
             const isIntro = difficulty === "intro";
-            const questionNumber = index + 1;  // convert to 1-based for display
+            const questionNumber = index + 1;
 
-            console.log(`[interview:${interviewId}] Q${questionNumber} (${difficulty.toUpperCase()}): ${question}`);
+            const payload = { interviewId, questionNumber, difficulty, isIntro, question };
 
-            io.to(`interview:${interviewId}`).emit("interview:question", {
-                interviewId,
-                questionNumber,
-                difficulty,
-                isIntro,
-                question,
-            });
+            // Cache so late-joining sockets can get it
+            await redisClient.set(
+                `interview:${interviewId}:current_question`,
+                JSON.stringify(payload),
+                "EX", 3600
+            );
+
+            io.to(`interview:${interviewId}`).emit("interview:question", payload);
             break;
         }
 

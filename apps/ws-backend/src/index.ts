@@ -1,44 +1,40 @@
 // Load env FIRST
+import dotenv from "dotenv";
 dotenv.config({ override: true });
-// apps/ws-backend/src/index.ts (COMPLETE & FINAL)
+
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { Server } from "socket.io";
 import http from "http";
-import dotenv from "dotenv";
 import routes from "./routes/resume.routes.js";
 import { errorMiddleware } from "./middlewares/error.middlewares.js";
 import { auth } from "@repo/auth/server";
 import { toNodeHandler } from "better-auth/node";
 import { prisma } from "@repo/db/prisma-db";
-import "./workers/processResume.workers.js"
-import "./workers/interviewCreation.workers.js"
+import "./workers/processResume.workers.js";
+import "./workers/interviewCreation.workers.js";
+
 import { redisClient } from "./config/redis.config.js";
 
 const app: express.Application = express();
 const server = http.createServer(app);
+
 export const io = new Server(server, {
   cors: {
     origin: "http://localhost:3000",
-    credentials: true
-  }
+    credentials: true,
+  },
 });
 
 /* ---------------------------
-   Global Middlewares FIRST
+   Global Middlewares
 --------------------------- */
 app.use(cookieParser());
-app.use(
-  cors({
-    origin: "http://localhost:3000",
-    credentials: true,
-  })
-);
+app.use(cors({ origin: "http://localhost:3000", credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ Express 5 wildcard syntax
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
 /* ---------------------------
@@ -51,26 +47,25 @@ app.get("/health", async (_req, res) => {
       status: "OK",
       users,
       timestamp: new Date().toISOString(),
-      dbConnected: true
+      dbConnected: true,
     });
   } catch (error: any) {
     console.error("Health check DB error:", error);
     res.status(500).json({
       status: "ERROR",
       error: "DB connection failed",
-      details: error.message
+      details: error.message,
     });
   }
 });
 
-
 /* ---------------------------
-   Other API Routes
+   API Routes
 --------------------------- */
 app.use("/api", routes);
 
 /* ---------------------------
-   WebSocket Setup
+   WebSocket
 --------------------------- */
 io.on("connection", (socket) => {
   console.log("✅ WebSocket client connected:", socket.id);
@@ -80,20 +75,39 @@ io.on("connection", (socket) => {
     socket.emit("resume_processed", { status: "success" });
   });
 
-  socket.on("join_interview", ({ interviewId }: { interviewId: string }) => {
+  // Join room + replay cached question if already generated
+  socket.on("join_interview", async ({ interviewId }: { interviewId: string }) => {
     socket.join(`interview:${interviewId}`);
+    console.log(`[join_interview] Socket ${socket.id} joined room interview:${interviewId}`);
+
+    try {
+      const cached = await redisClient.get(`interview:${interviewId}:current_question`);
+      if (cached) {
+        console.log(`[join_interview] Replaying cached question for ${interviewId}`);
+        socket.emit("interview:question", JSON.parse(cached));
+      }
+    } catch (err) {
+      console.error(`[join_interview] Failed to replay cached question:`, err);
+    }
   });
 
-  socket.on("submit_answer", async ({ interviewId, answer }: { interviewId: string; answer: string }) => {
-    await redisClient.set(`interview:${interviewId}:latest_answer`, answer, "EX", 300);
-  });
+  socket.on(
+    "submit_answer",
+    async ({ interviewId, answer }: { interviewId: string; answer: string }) => {
+      await redisClient.set(
+        `interview:${interviewId}:latest_answer`,
+        answer,
+        "EX",
+        300
+      );
+    }
+  );
 
   socket.on("disconnect", () => {
     console.log("❌ WebSocket client disconnected:", socket.id);
   });
 });
 
-// Attach io to app for route access
 app.set("io", io);
 
 /* ---------------------------
@@ -102,15 +116,12 @@ app.set("io", io);
 app.use(errorMiddleware);
 
 /* ---------------------------
-   START SERVER ON PORT 4000
+   Start Server
 --------------------------- */
-const PORT = 4000;  // Fixed port
+const PORT = 4000;
 
-
-// Port free, start server
 server.listen(PORT, () => {
   console.log(`✅ ws-backend + WebSocket running on port ${PORT}`);
   console.log(`✅ DATABASE_URL loaded:`, !!process.env.DATABASE_URL ? "✅" : "❌");
-  console.log(`✅ Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`✅ Environment: ${process.env.NODE_ENV || "development"}`);
 });
-

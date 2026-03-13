@@ -106,31 +106,6 @@ function FaceStatusBanner({ status }: { status:"no-face"|"multiple" }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────
-// useFaceDetection  — CANVAS-BASED (KEY FIX)
-//
-// WHY THE OLD VERSION MISSED FACES:
-//   face-api.js runs detection on whatever element you pass it.
-//   When you pass the <video> element directly, it reads the
-//   element's DISPLAYED size (e.g. 300×200px on screen).
-//   If faces are small relative to that display size, or the
-//   video card is cramped, the model gets a tiny low-res input
-//   and misses faces entirely.
-//
-// THE FIX — offscreen canvas at full native resolution:
-//   1. Create an offscreen canvas at video.videoWidth × videoHeight
-//      (the ACTUAL camera resolution, e.g. 1280×720)
-//   2. drawImage(video) onto it at full resolution
-//   3. Run faceapi.detectAllFaces on the CANVAS, not the video
-//   This gives the model a full-res frame regardless of how
-//   small the video element is on screen.
-//
-// OTHER TUNING:
-//   inputSize  416  (was 224) — larger window catches more faces
-//   scoreThreshold 0.3 (was 0.45) — less strict, catches angled
-//                                    or partially visible faces
-//   GRACE_FRAMES 3 (was 5/6) — faster response (~1.8 s)
-// ─────────────────────────────────────────────────────────
 type FaceStatus = "ok" | "no-face" | "multiple";
 
 function useFaceDetection(
@@ -142,7 +117,6 @@ function useFaceDetection(
   const [modelsReady, setModelsReady] = useState(false);
   const badFrames = useRef(0);
   const statusRef = useRef<FaceStatus>("ok");
-  // Reuse one offscreen canvas across ticks (avoid GC pressure)
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const POLL_MS = 600;
@@ -174,38 +148,25 @@ function useFaceDetection(
 
       try {
         const faceapi = await import("face-api.js");
-
-        // ── Draw video frame onto offscreen canvas at NATIVE resolution ──
         const vw = video.videoWidth;
         const vh = video.videoHeight;
 
-        // Create canvas once, resize only if resolution changes
-        if (!canvasRef.current) {
-          canvasRef.current = document.createElement("canvas");
-        }
+        if (!canvasRef.current) canvasRef.current = document.createElement("canvas");
         const canvas = canvasRef.current;
-        if (canvas.width !== vw || canvas.height !== vh) {
-          canvas.width = vw;
-          canvas.height = vh;
-        }
+        if (canvas.width !== vw || canvas.height !== vh) { canvas.width = vw; canvas.height = vh; }
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
         ctx.drawImage(video, 0, 0, vw, vh);
 
-        // ── Run detection on the full-res canvas ──
         const detections = await faceapi.detectAllFaces(
           canvas,
-          new faceapi.TinyFaceDetectorOptions({
-            inputSize: 416,       // larger = catches more faces (esp. side-by-side)
-            scoreThreshold: 0.3,  // lower = less strict, catches angled faces
-          }),
+          new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 }),
         );
 
         if (cancelled) return;
 
         const n = detections.length;
         setCount(n);
-
         const raw: FaceStatus = n === 0 ? "no-face" : n > 1 ? "multiple" : "ok";
 
         if (raw !== "ok") {
@@ -216,23 +177,13 @@ function useFaceDetection(
           }
         } else {
           badFrames.current = 0;
-          if (statusRef.current !== "ok") {
-            statusRef.current = "ok";
-            setStatus("ok");
-          }
+          if (statusRef.current !== "ok") { statusRef.current = "ok"; setStatus("ok"); }
         }
-      } catch {
-        // swallow transient errors
-      }
+      } catch { /* swallow transient errors */ }
     };
 
     const intervalId = setInterval(tick, POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(intervalId);
-      badFrames.current = 0;
-      statusRef.current = "ok";
-    };
+    return () => { cancelled = true; clearInterval(intervalId); badFrames.current = 0; statusRef.current = "ok"; };
   }, [modelsReady, enabled, videoRef]);
 
   return { status, count, modelsReady };
@@ -242,7 +193,7 @@ function useFaceDetection(
 // Main Interview Page
 // ─────────────────────────────────────────────────────────
 export default function InterviewPage() {
-  
+
   const router = useRouter();
   const params = useParams();
   const interviewId = params.id as string;
@@ -296,13 +247,13 @@ export default function InterviewPage() {
     if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
     if (!fromBackend) getSocket().emit("submit_answer", { interviewId, answer: "__END__" });
     setTimeout(() => {
-      fetch(`http://localhost:4000/api/interview/${interviewId}/complete`, { method:"POST", credentials:"include" })
+      fetch(`http://localhost:4000/api/interview/${interviewId}/complete`, { method: "POST", credentials: "include" })
         .catch((e) => console.error("[persist]", e));
     }, fromBackend ? 0 : 2000);
     setTimeout(() => { reset(); router.push(`/feedback/${interviewId}/`); }, 1000);
   }, [isEnding, interviewId, router, reset]);
 
-  // ── Face modal: open when violation confirmed, close when resolved ──
+  // ── Face modal: open on violation, close when resolved ──
   useEffect(() => {
     if (!modelsReady || isEnding || !sessionRunning) return;
     if (faceStatus !== "ok" && !showFaceModal) { setFaceCountdown(15); setShowFaceModal(true); }
@@ -313,7 +264,7 @@ export default function InterviewPage() {
     }
   }, [faceStatus, modelsReady, isEnding, sessionRunning, showFaceModal]);
 
-  // ── Countdown runs while modal is open ──
+  // ── Countdown while modal is open ──
   useEffect(() => {
     if (!showFaceModal) return;
     faceCountdownRef.current = setInterval(() => {
@@ -331,6 +282,7 @@ export default function InterviewPage() {
     setFaceCountdown(15);
   }, []);
 
+  // ── Tab switch detection ──
   useEffect(() => {
     const handle = () => {
       if (document.visibilityState !== "hidden" || isEnding) return;
@@ -353,7 +305,7 @@ export default function InterviewPage() {
     if (!aiAudioRef.current) return;
     try {
       setAiSpeaking(true);
-      const res = await fetch("/api/tts", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ text, voice:"alloy" }) });
+      const res = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voice: "alloy" }) });
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       aiAudioRef.current.src = url;
@@ -364,38 +316,55 @@ export default function InterviewPage() {
 
   const handleQuestion = useCallback((data: { question: string; time?: number }) => {
     const now = data.time
-      ? new Date(data.time).toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" })
-      : new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
-    addMessage({ id: Date.now(), role:"ai", text: data.question, time: now });
+      ? new Date(data.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    addMessage({ id: Date.now(), role: "ai", text: data.question, time: now });
     playAIAudio(data.question);
   }, [addMessage, playAIAudio]);
 
   const { transcript, startListening, stopListening } =
     useSpeechToText((finalText) => {
       if (!finalText.trim()) return;
-      const now = new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" });
-      addMessage({ id: Date.now(), role:"user", text: finalText, time: now });
+      const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      addMessage({ id: Date.now(), role: "user", text: finalText, time: now });
       setInput("");
       getSocket().emit("submit_answer", { interviewId, answer: finalText });
       setAiSpeaking(true);
     });
 
+  // ── Socket: join room + handle first question dedup ──
   useEffect(() => {
     const socket = getSocket();
+
+    // Always join the room for subsequent questions
     socket.emit("join_interview", { interviewId });
-    if (currentQuestion) { handleQuestion(currentQuestion); clearCurrentQuestion(); }
-    socket.on("interview:question", handleQuestion);
+
+    if (currentQuestion) {
+      // Question already received in waiting room — replay from store, skip socket event
+      handleQuestion(currentQuestion);
+      clearCurrentQuestion();
+    } else {
+      // Question not yet in store — wait for socket to deliver it
+      socket.on("interview:question", handleQuestion);
+    }
+
     socket.on("interview:complete", () => endSession(true));
-    return () => { socket.off("interview:question"); socket.off("interview:complete"); };
-  }, [interviewId, handleQuestion]);
+
+    return () => {
+      socket.off("interview:question", handleQuestion);
+      socket.off("interview:complete");
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interviewId]);
 
   const startListeningRef = useRef(startListening);
   const stopListeningRef = useRef(stopListening);
   useEffect(() => { startListeningRef.current = startListening; }, [startListening]);
   useEffect(() => { stopListeningRef.current = stopListening; }, [stopListening]);
 
+  // ── Media permissions ──
   useEffect(() => {
-    navigator.mediaDevices.getUserMedia({ video: { facingMode:"user" }, audio: true })
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true })
       .then((stream) => { userStreamRef.current = stream; setMicPermission(true); setCamPermission(true); })
       .catch((err) => console.error("[media]", err));
     return () => { userStreamRef.current?.getTracks().forEach((t) => t.stop()); };
@@ -413,6 +382,7 @@ export default function InterviewPage() {
     return () => { stopListeningRef.current(); };
   }, [micOn, aiSpeaking]);
 
+  // ── Recording ──
   const startRecording = useCallback(() => {
     if (!userStreamRef.current || isRecordingRef.current) return;
     try {
@@ -435,11 +405,11 @@ export default function InterviewPage() {
       chunksRef.current = [];
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
       recorder.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type:"video/webm" });
+        const blob = new Blob(chunksRef.current, { type: "video/webm" });
         const fd = new FormData();
         fd.append("file", blob, "recording.webm");
         fd.append("interviewId", interviewId);
-        await fetch("/api/save-recording", { method:"POST", body: fd });
+        await fetch("/api/save-recording", { method: "POST", body: fd });
       };
       recorder.start(1000);
     } catch (err) { console.error("[recording]", err); isRecordingRef.current = false; }
@@ -449,12 +419,12 @@ export default function InterviewPage() {
     if (micPermission && camPermission && !isRecordingRef.current) startRecording();
   }, [micPermission, camPermission, startRecording]);
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior:"smooth" }); }, [messages]);
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   const sendMessage = () => {
     const text = input.trim();
     if (!text) return;
-    addMessage({ id: Date.now(), role:"user", text, time: new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit" }) });
+    addMessage({ id: Date.now(), role: "user", text, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) });
     setInput("");
     getSocket().emit("submit_answer", { interviewId, answer: text });
     setAiSpeaking(true);
@@ -471,7 +441,7 @@ export default function InterviewPage() {
       <div className="noise" />
 
       {showFaceModal && (
-        <FaceViolationModal status={faceStatus as "no-face"|"multiple"} countdown={faceCountdown} onDismiss={handleDismissFaceModal} />
+        <FaceViolationModal status={faceStatus as "no-face" | "multiple"} countdown={faceCountdown} onDismiss={handleDismissFaceModal} />
       )}
       {showTabWarning && (
         <TabSwitchWarningModal count={tabSwitchCount} onDismiss={handleDismissTabWarning} />
@@ -488,19 +458,19 @@ export default function InterviewPage() {
             </div>
           </div>
           <div className="topbar-center">
-            <div className={`live-chip${aiSpeaking?" ai-pulse":""}`}><span className="dot-live"/>LIVE</div>
+            <div className={`live-chip${aiSpeaking ? " ai-pulse" : ""}`}><span className="dot-live" />LIVE</div>
             <div className="timer-block"><span className="timer">{timer}</span></div>
           </div>
           <div className="topbar-right">
             {tabSwitchCount > 0 && (
-              <div style={{ display:"flex", alignItems:"center", gap:"6px", padding:"4px 10px", borderRadius:"99px", background:"rgba(245,158,11,0.1)", border:"1px solid rgba(245,158,11,0.3)", fontSize:"12px", color:"#f59e0b", fontWeight:600 }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 10px", borderRadius: "99px", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", fontSize: "12px", color: "#f59e0b", fontWeight: 600 }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 Tab switches: {tabSwitchCount}/2
               </div>
             )}
             {modelsReady && faceStatus !== "ok" && (
-              <div style={{ display:"flex", alignItems:"center", gap:"6px", padding:"4px 10px", borderRadius:"99px", background:"rgba(239,68,68,0.1)", border:"1px solid rgba(239,68,68,0.3)", fontSize:"12px", color:"#ef4444", fontWeight:600 }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 10px", borderRadius: "99px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", fontSize: "12px", color: "#ef4444", fontWeight: 600 }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 {faceStatus === "multiple" ? `${faceCount} faces` : "No face"}
               </div>
             )}
@@ -517,65 +487,65 @@ export default function InterviewPage() {
         <div className="interview-body">
           <div className="video-area">
 
-            <div className={`vid-card vid-ai${aiSpeaking?" speaking":""}`}>
+            <div className={`vid-card vid-ai${aiSpeaking ? " speaking" : ""}`}>
               <div className="vid-inner">
                 <div className="vid-placeholder vid-placeholder-ai">
                   <div className="vid-avatar-ring">
-                    <div className="vid-avatar"><audio ref={aiAudioRef}/></div>
+                    <div className="vid-avatar"><audio ref={aiAudioRef} /></div>
                   </div>
                   <div className="vid-circuit">
-                    {[...Array(6)].map((_,i)=><div key={i} className="circuit-line" style={{ animationDelay:`${i*0.4}s` }}/>)}
+                    {[...Array(6)].map((_, i) => <div key={i} className="circuit-line" style={{ animationDelay: `${i * 0.4}s` }} />)}
                   </div>
                 </div>
                 <div className="vid-speaking-bar">
-                  <WaveBars active={aiSpeaking}/>
-                  <span className="vid-speaking-label">{aiSpeaking?"AI is speaking…":"Listening"}</span>
+                  <WaveBars active={aiSpeaking} />
+                  <span className="vid-speaking-label">{aiSpeaking ? "AI is speaking…" : "Listening"}</span>
                 </div>
               </div>
               <div className="vid-nametag">
-                <span className="dot-accent-static"/>
+                <span className="dot-accent-static" />
                 <span className="vid-name">PrepAI Interviewer</span>
                 <span className="tag tag-violet">GPT-o3</span>
               </div>
             </div>
 
-            <div className={`vid-card vid-user${!camOn?" cam-off":""}`} style={{ position:"relative" }}>
-              {showFaceBanner && <FaceStatusBanner status={faceStatus as "no-face"|"multiple"}/>}
+            <div className={`vid-card vid-user${!camOn ? " cam-off" : ""}`} style={{ position: "relative" }}>
+              {showFaceBanner && <FaceStatusBanner status={faceStatus as "no-face" | "multiple"} />}
               <div className="vid-inner">
                 {camOn && micPermission ? (
                   <div className="vid-placeholder vid-placeholder-user">
                     <div className="vid-avatar-user">
-                      <video ref={userVideoRef} autoPlay muted playsInline/>
+                      <video ref={userVideoRef} autoPlay muted playsInline />
                     </div>
-                    {[...Array(8)].map((_,i)=>(
-                      <div key={i} className="bokeh" style={{ left:`${10+i*11}%`, top:`${20+(i%3)*25}%`, animationDelay:`${i*0.3}s`, zIndex:0 }}/>
+                    {[...Array(8)].map((_, i) => (
+                      <div key={i} className="bokeh" style={{ left: `${10 + i * 11}%`, top: `${20 + (i % 3) * 25}%`, animationDelay: `${i * 0.3}s`, zIndex: 0 }} />
                     ))}
                   </div>
                 ) : (
                   <div className="cam-off-state h-full! flex! items-center justify-center">
-                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M3 3l18 18M10.5 10.5A2 2 0 0013.5 13.5M9 5h7l2 2h3v12H9m-5-5V7h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none"><path d="M3 3l18 18M10.5 10.5A2 2 0 0013.5 13.5M9 5h7l2 2h3v12H9m-5-5V7h2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
                     <span>Camera off</span>
                   </div>
                 )}
               </div>
               <div className="vid-nametag">
-                <span className="dot-accent-static dot-user"/>
+                <span className="dot-accent-static dot-user" />
                 <span className="vid-name"></span>
                 <span className="tag tag-sky">You</span>
               </div>
             </div>
 
             <div className="controls-bar">
-              <button className={`ctrl-btn${!micOn?" ctrl-off":""}`} onClick={()=>setMicOn((p)=>!p)}>
-                {micOn?(<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="9" y="2" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="1.8"/><path d="M5 10a7 7 0 0014 0M12 19v3M9 22h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>):(<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 3l18 18M9 9v5a3 3 0 005.12 2.12M15 9.34V5a3 3 0 00-5.94-.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/><path d="M17 16.95A7 7 0 015 10M12 19v3M9 22h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>)}
-                <span>{micOn?"Mute":"Unmute"}</span>
+              <button className={`ctrl-btn${!micOn ? " ctrl-off" : ""}`} onClick={() => setMicOn((p) => !p)}>
+                {micOn ? (<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="9" y="2" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="1.8" /><path d="M5 10a7 7 0 0014 0M12 19v3M9 22h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>) : (<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 3l18 18M9 9v5a3 3 0 005.12 2.12M15 9.34V5a3 3 0 00-5.94-.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><path d="M17 16.95A7 7 0 015 10M12 19v3M9 22h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>)}
+                <span>{micOn ? "Mute" : "Unmute"}</span>
               </button>
-              <button className={`ctrl-btn${!camOn?" ctrl-off":""}`} onClick={()=>setCamOn((v)=>!v)}>
-                {camOn?(<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>):(<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 3l18 18M10.5 8.5H13a2 2 0 012 2v.5m1 4.47V16a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h.5M15 10l4.553-2.276A1 1 0 0121 8.723v6.554" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>)}
-                <span>{camOn?"Camera":"No cam"}</span>
+              <button className={`ctrl-btn${!camOn ? " ctrl-off" : ""}`} onClick={() => setCamOn((v) => !v)}>
+                {camOn ? (<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>) : (<svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 3l18 18M10.5 8.5H13a2 2 0 012 2v.5m1 4.47V16a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h.5M15 10l4.553-2.276A1 1 0 0121 8.723v6.554" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>)}
+                <span>{camOn ? "Camera" : "No cam"}</span>
               </button>
-              <button className="ctrl-btn ctrl-btn-end" onClick={()=>endSession(false)} disabled={isEnding}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6.827 6.175A8 8 0 0117.173 17.173M12 6v6l4 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/><path d="M3.05 11a9 9 0 1017.9 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+              <button className="ctrl-btn ctrl-btn-end" onClick={() => endSession(false)} disabled={isEnding}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6.827 6.175A8 8 0 0117.173 17.173M12 6v6l4 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><path d="M3.05 11a9 9 0 1017.9 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
                 <span>End</span>
               </button>
             </div>
@@ -587,25 +557,25 @@ export default function InterviewPage() {
               <span className="chat-count">{messages.length} msgs</span>
             </div>
             <div className="chat-messages">
-              {messages.map((m,i)=>(
-                <div key={m.id} className={`chat-msg chat-msg-${m.role}`} style={{ animationDelay:`${i*40}ms` }}>
-                  {m.role==="ai"&&<div className="chat-msg-avatar chat-msg-avatar-ai">AI</div>}
+              {messages.map((m, i) => (
+                <div key={m.id} className={`chat-msg chat-msg-${m.role}`} style={{ animationDelay: `${i * 40}ms` }}>
+                  {m.role === "ai" && <div className="chat-msg-avatar chat-msg-avatar-ai">AI</div>}
                   <div className="chat-msg-body"><div className="chat-bubble">{m.text}</div><div className="chat-time">{m.time}</div></div>
-                  {m.role==="user"&&<div className="chat-msg-avatar chat-msg-avatar-user">AR</div>}
+                  {m.role === "user" && <div className="chat-msg-avatar chat-msg-avatar-user">AR</div>}
                 </div>
               ))}
-              {aiSpeaking&&(
+              {aiSpeaking && (
                 <div className="chat-msg chat-msg-ai">
                   <div className="chat-msg-avatar chat-msg-avatar-ai">AI</div>
-                  <div className="chat-msg-body"><div className="chat-bubble chat-bubble-typing"><span className="typing-dot" style={{animationDelay:"0s"}}/><span className="typing-dot" style={{animationDelay:"0.18s"}}/><span className="typing-dot" style={{animationDelay:"0.36s"}}/></div></div>
+                  <div className="chat-msg-body"><div className="chat-bubble chat-bubble-typing"><span className="typing-dot" style={{ animationDelay: "0s" }} /><span className="typing-dot" style={{ animationDelay: "0.18s" }} /><span className="typing-dot" style={{ animationDelay: "0.36s" }} /></div></div>
                 </div>
               )}
-              <div ref={chatEndRef}/>
+              <div ref={chatEndRef} />
             </div>
             <div className="chat-input-wrap">
-              <textarea className="chat-input" rows={1} placeholder="Type a response or note…" value={input} onChange={(e)=>setInput(e.target.value)} onKeyDown={handleKey}/>
+              <textarea className="chat-input" rows={1} placeholder="Type a response or note…" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKey} />
               <button className="chat-send-btn" onClick={sendMessage} disabled={!input.trim()} aria-label="Send">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2L15 22 11 13 2 9l20-7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2L15 22 11 13 2 9l20-7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
               </button>
             </div>
           </aside>
