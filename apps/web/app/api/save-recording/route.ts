@@ -11,7 +11,6 @@ export async function POST(req: NextRequest) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const filename = `interview-${interviewId}-${timestamp}.webm`;
 
-  // Saves to apps/web/recordings/
   const savePath = path.join(process.cwd(), "recordings", filename);
   await writeFile(savePath, buffer);
 

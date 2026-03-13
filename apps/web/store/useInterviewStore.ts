@@ -1,12 +1,12 @@
 import { create } from "zustand";
 
 interface Question {
+  interviewId: string;
   index: number;
   difficulty: "intro" | "easy" | "medium" | "hard";
   question: string;
   time: number;
 }
-
 interface Message {
   id: number;
   role: "ai" | "user";

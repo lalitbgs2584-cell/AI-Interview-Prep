@@ -16,6 +16,7 @@ interface QuestionEvent {
     index: number;         // 0-based question number
     difficulty: "intro" | "easy" | "medium" | "hard";
     question: string;
+    time: number;
 }
 
 interface InterviewCompleteEvent {
@@ -49,7 +50,7 @@ subscriber.on("pmessage", async (pattern: string, channel: string, message: stri
 
     // channel format → interview:12345:events
     const interviewId = channel.split(":")[1];
-
+    console.log("In interview creation wokers helpers.")
     console.log(`[interview:${interviewId}] Event received: ${data.type}`);
 
     switch (data.type) {
@@ -66,13 +67,16 @@ subscriber.on("pmessage", async (pattern: string, channel: string, message: stri
         //     current_question will be the follow-up text from evaluate_answer
         // -----------------------------------------------------------------
         case "question": {
-            const { index, difficulty, question } = data as QuestionEvent;
-            const isIntro = difficulty === "intro";
-            const questionNumber = index + 1;
+            const { index, difficulty, question, time } = data as QuestionEvent;  // add time to interface too
 
-            const payload = { interviewId, questionNumber, difficulty, isIntro, question };
+            const payload = {
+                interviewId,
+                index,           // ← was "questionNumber", change to "index"
+                difficulty,
+                question,
+                time: time ?? Date.now(),  // ← add time
+            };
 
-            // Cache so late-joining sockets can get it
             await redisClient.set(
                 `interview:${interviewId}:current_question`,
                 JSON.stringify(payload),

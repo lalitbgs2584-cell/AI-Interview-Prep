@@ -91,17 +91,23 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on(
-    "submit_answer",
-    async ({ interviewId, answer }: { interviewId: string; answer: string }) => {
-      await redisClient.set(
-        `interview:${interviewId}:latest_answer`,
-        answer,
-        "EX",
-        300
-      );
-    }
-  );
+  socket.on("submit_answer", async ({ interviewId, answer }) => {
+    await redisClient.set(`interview:${interviewId}:latest_answer`, answer, "EX", 300);
+
+    // Signal the Python node that an answer is ready
+    await redisClient.publish(`interview:${interviewId}:answer_ready`, "1");
+  });
+
+  socket.on("interview:end", async ({ interviewId }) => {
+    await redisClient.set(
+      `interview:${interviewId}:latest_answer`,
+      "__END__"
+    );
+    await redisClient.publish(
+      `interview:${interviewId}:answer_ready`,
+      "1"
+    );
+  });
 
   socket.on("disconnect", () => {
     console.log("❌ WebSocket client disconnected:", socket.id);

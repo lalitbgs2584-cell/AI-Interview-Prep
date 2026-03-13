@@ -172,6 +172,7 @@ model Interview {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  videoUrl String?
   status InterviewStatus @default(CREATED)
   type   InterviewType   @default(TECHNICAL)
 
@@ -215,14 +216,6 @@ model Response {
 
   interviewQuestionId String            @unique
   interviewQuestion   InterviewQuestion @relation(fields: [interviewQuestionId], references: [id], onDelete: Cascade)
-
-  userText       String?
-  userAudioUrl   String?
-  userTranscript String?
-
-  aiIdealAnswer String?
-
-  durationSeconds Int?
   submittedAt     DateTime?
 
   evaluation Evaluation?

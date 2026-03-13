@@ -1,196 +1,248 @@
 "use client";
 
-import { redirect } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
 type InterviewType = "TECHNICAL" | "HR" | "SYSTEM_DESIGN" | "BEHAVIORAL";
-type Difficulty = "EASY" | "MEDIUM" | "HARD";
+type Difficulty    = "easy" | "medium" | "hard";
 
 interface Props {
-  isOpen: boolean;
+  isOpen:  boolean;
   onClose: () => void;
 }
 
-const INTERVIEW_TYPES: { value: InterviewType; label: string; icon: string; desc: string }[] = [
-  { value: "TECHNICAL", label: "Technical", icon: "◈", desc: "DSA, coding, algorithms" },
-  { value: "SYSTEM_DESIGN", label: "System Design", icon: "⬡", desc: "Architecture & scalability" },
-  { value: "BEHAVIORAL", label: "Behavioral", icon: "◎", desc: "STAR-method, culture fit" },
-  { value: "HR", label: "HR Round", icon: "◉", desc: "Salary, career, soft skills" },
+// ─── Static data ──────────────────────────────────────────────────────────────
+
+const INTERVIEW_TYPES: { value: InterviewType; label: string; desc: string }[] = [
+  { value: "TECHNICAL",     label: "Technical",     desc: "DSA, coding, algorithms" },
+  { value: "SYSTEM_DESIGN", label: "System Design", desc: "Architecture & scalability" },
+  { value: "BEHAVIORAL",    label: "Behavioral",    desc: "STAR-method, culture fit" },
+  { value: "HR",            label: "HR Round",      desc: "Salary, career, soft skills" },
 ];
 
 const DIFFICULTIES: { value: Difficulty; label: string }[] = [
-  { value: "EASY", label: "Easy" },
-  { value: "MEDIUM", label: "Medium" },
-  { value: "HARD", label: "Hard" },
+  { value: "easy",   label: "Easy" },
+  { value: "medium", label: "Medium" },
+  { value: "hard",   label: "Hard" },
 ];
 
 const TOPIC_SUGGESTIONS: Record<InterviewType, string[]> = {
   TECHNICAL: [
-    "Arrays", "Strings", "Two Pointers", "Sliding Window",
-    "Linked Lists", "Binary Trees", "Binary Search Trees", "Tries",
-    "Graphs", "BFS", "DFS", "Topological Sort", "Union Find",
-    "Dynamic Programming", "Recursion", "Backtracking", "Memoization",
-    "Sorting", "Binary Search", "Hash Maps", "Heaps", "Stacks", "Queues",
-    "Bit Manipulation", "Greedy", "Intervals", "Monotonic Stack",
+    "Arrays","Strings","Two Pointers","Sliding Window","Linked Lists",
+    "Binary Trees","BST","Tries","Graphs","BFS","DFS","Topological Sort",
+    "Union Find","Dynamic Programming","Recursion","Backtracking","Memoization",
+    "Sorting","Binary Search","Hash Maps","Heaps","Stacks","Queues",
+    "Bit Manipulation","Greedy","Intervals","Monotonic Stack",
   ],
   SYSTEM_DESIGN: [
-    "URL Shortener", "Rate Limiter", "Chat App", "News Feed",
-    "Notification Service", "Search Autocomplete", "Pastebin",
-    "Load Balancer", "CDN", "Caching", "Distributed Cache",
-    "SQL vs NoSQL", "Database Sharding", "Replication",
-    "Twitter Clone", "YouTube", "Uber / Ride Sharing",
-    "Google Drive", "Payment System", "E-commerce Platform",
-    "API Gateway", "Message Queue", "Microservices vs Monolith",
-    "CAP Theorem", "Consistent Hashing", "Event-Driven Architecture",
+    "URL Shortener","Rate Limiter","Chat App","News Feed","Notification Service",
+    "Search Autocomplete","Pastebin","Load Balancer","CDN","Caching",
+    "Distributed Cache","SQL vs NoSQL","Database Sharding","Replication",
+    "Twitter Clone","YouTube","Uber / Ride Sharing","Google Drive",
+    "Payment System","E-commerce Platform","API Gateway","Message Queue",
+    "Microservices vs Monolith","CAP Theorem","Consistent Hashing",
+    "Event-Driven Architecture",
   ],
   BEHAVIORAL: [
-    "Leadership", "Taking Initiative", "Ownership & Accountability",
-    "Mentoring Others", "Conflict Resolution", "Disagreeing with a Manager",
-    "Cross-team Collaboration", "Dealing with Difficult Teammates",
-    "Failure & Learnings", "Handling Ambiguity", "Adaptability",
-    "Working Under Pressure", "Meeting a Tight Deadline",
-    "Biggest Achievement", "Going Beyond Your Role", "Improving a Process",
-    "Teamwork", "Giving Feedback", "Receiving Feedback",
+    "Leadership","Taking Initiative","Ownership & Accountability",
+    "Mentoring Others","Conflict Resolution","Disagreeing with a Manager",
+    "Cross-team Collaboration","Dealing with Difficult Teammates",
+    "Failure & Learnings","Handling Ambiguity","Adaptability",
+    "Working Under Pressure","Meeting a Tight Deadline","Biggest Achievement",
+    "Going Beyond Your Role","Improving a Process","Teamwork",
+    "Giving Feedback","Receiving Feedback",
   ],
   HR: [
-    "Why This Company", "Why This Role", "Career Goals",
-    "Where Do You See Yourself in 5 Years", "Company Culture",
-    "Strengths", "Weaknesses", "What Makes You Unique",
-    "How Do You Handle Criticism", "Work Style",
-    "Salary Negotiation", "Notice Period", "Relocation",
-    "Work-Life Balance", "Remote vs On-site Preference",
-    "How Do You Prioritize Tasks", "Handling Multiple Deadlines",
-    "How Do You Stay Updated in Your Field",
+    "Why This Company","Why This Role","Career Goals",
+    "Where Do You See Yourself in 5 Years","Company Culture",
+    "Strengths","Weaknesses","What Makes You Unique",
+    "How Do You Handle Criticism","Work Style","Salary Negotiation",
+    "Notice Period","Relocation","Work-Life Balance",
+    "Remote vs On-site Preference","How Do You Prioritize Tasks",
+    "Handling Multiple Deadlines","How Do You Stay Updated in Your Field",
   ],
 };
 
+// ─── Description builder ──────────────────────────────────────────────────────
+//
+// The Python node reads state.description and looks for a machine-readable
+// config block packed at the front, followed by human-readable context.
+//
+// Block format:
+//   __CUSTOM_CONFIG__{"max_questions":8,"difficulty_override":"hard","topics":["Redis"]}__END_CONFIG__
+//   Focus topics: Redis.
+//   Candidate notes: <notes>
+//   Job Description:
+//   <jd>
+
+function buildDescription(
+  topics:        string[],
+  notes:         string,
+  jdText:        string,
+  difficulty:    Difficulty,
+  questionCount: number,
+): string {
+  // 1. Machine-readable config block (parsed by Python's parse_custom_config)
+  const configBlock =
+    `__CUSTOM_CONFIG__${JSON.stringify({
+      max_questions:      questionCount,
+      difficulty_override: difficulty,
+      topics,
+    })}__END_CONFIG__`;
+
+  // 2. Human-readable context (used verbatim in prompts)
+  const parts: string[] = [configBlock];
+  if (topics.length > 0) parts.push(`Focus topics: ${topics.join(", ")}.`);
+  if (notes.trim())      parts.push(`Candidate notes: ${notes.trim()}`);
+  if (jdText.trim())     parts.push(`Job Description:\n${jdText.trim()}`);
+
+  return parts.join("\n\n");
+}
+
+// ─── Modal ────────────────────────────────────────────────────────────────────
+
 export default function CustomSessionModal({ isOpen, onClose }: Props) {
-  const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [title, setTitle] = useState("");
-  const [type, setType] = useState<InterviewType | "">("");
-  const [difficulty, setDifficulty] = useState<Difficulty | "">("");
-  const [questionCount, setQuestionCount] = useState(5);
-  const [topics, setTopics] = useState<string[]>([]);
-  const [customTopic, setCustomTopic] = useState("");
-  const [description, setDescription] = useState("");
-  const [jdText, setJdText] = useState("");
-  const [jdParsing, setJdParsing] = useState(false);
-  const [jdTopics, setJdTopics] = useState<string[]>([]);
+  const router = useRouter();
+
+  const [step,          setStep]          = useState<1 | 2 | 3>(1);
+  const [title,         setTitle]         = useState("");
+  const [type,          setType]          = useState<InterviewType | "">("");
+  const [difficulty,    setDifficulty]    = useState<Difficulty | "">("");
+  const [questionCount, setQuestionCount] = useState(10);
+  const [topics,        setTopics]        = useState<string[]>([]);
+  const [customTopic,   setCustomTopic]   = useState("");
+  const [notes,         setNotes]         = useState("");
+  const [jdText,        setJdText]        = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState("");
+
   if (!isOpen) return null;
+
+  const suggestions = type ? TOPIC_SUGGESTIONS[type as InterviewType] : [];
+  const extraTopics = topics.filter((t) => !suggestions.includes(t));
 
   const toggleTopic = (t: string) =>
     setTopics((prev) => prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]);
 
   const addCustomTopic = () => {
     const trimmed = customTopic.trim();
-    if (trimmed && !topics.includes(trimmed)) {
-      setTopics((prev) => [...prev, trimmed]);
-    }
+    if (trimmed && !topics.includes(trimmed)) setTopics((prev) => [...prev, trimmed]);
     setCustomTopic("");
   };
 
-  const removeCustomTopic = (t: string) =>
-    setTopics((prev) => prev.filter((x) => x !== t));
+  const canNext   = type !== "" && difficulty !== "";
+  const canSubmit = canNext && title.trim() !== "";
 
-  // Call Claude API to extract topics from JD
-  const parseJD = async () => {
-    if (!jdText.trim()) return;
-    setJdParsing(true);
-    setJdTopics([]);
+  const handleStartInterview = async (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    if (!canSubmit || loading || !difficulty) return;
+    setError("");
+    setLoading(true);
+
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{
-            role: "user",
-            content: `You are an interview prep assistant. Given the job description below, extract the most relevant technical and non-technical interview topics a candidate should prepare for. Return ONLY a JSON array of short topic strings (max 3 words each), no explanation, no markdown, no backticks. Max 15 topics.
+      const description = buildDescription(
+        topics,
+        notes,
+        jdText,
+        difficulty as Difficulty,
+        questionCount,
+      );
 
-Job Description:
-${jdText}`,
-          }],
-        }),
-      });
-      const data = await res.json();
-      const text = data.content?.map((c: any) => c.text || "").join("") ?? "";
-      const cleaned = text.replace(/```json|```/g, "").trim();
-      const parsed: string[] = JSON.parse(cleaned);
-      setJdTopics(parsed);
-      // Auto-select parsed topics
-      setTopics((prev) => Array.from(new Set([...prev, ...parsed])));
-    } catch (err) {
-      console.error("JD parse error:", err);
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/start-interview`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            // ── Maps directly to InterviewState fields ─────────────────────
+            interviewTitle: title.trim(),   // → state.role
+            interviewType:  type,           // → state.interview_type
+            description,                   // → state.description (carries config + context)
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body?.message ?? "Failed to start interview");
+      }
+
+      const result = await response.json();
+      const interviewId = result.data.id;
+
+      router.push(
+        `/waiting-room?type=${encodeURIComponent(type)}&title=${encodeURIComponent(title.trim())}&id=${encodeURIComponent(interviewId)}`
+      );
+    } catch (err: any) {
+      console.error("[start-interview]", err);
+      setError(err.message ?? "Something went wrong. Please try again.");
     } finally {
-      setJdParsing(false);
+      setLoading(false);
     }
   };
-
-  const canProceed = type !== "" && difficulty !== "";
-  const canSubmit = canProceed && title.trim() !== "";
-
-  const handleSubmit = () => {
-    if (!canSubmit) return;
-    console.log({ title, type, difficulty, questionCount, topics, description, jdText });
-    // TODO: call API → createInterview(...) → router.push(`/interview/${id}`)
-    const id = "ldjl"
-    redirect(`/waiting-room?type=${encodeURIComponent(type)}&title=${encodeURIComponent(title)}&id=${encodeURIComponent(id)}`)
-    onClose();
-  };
-
-  const suggestions = type ? TOPIC_SUGGESTIONS[type as InterviewType] : [];
-  // Topics added by user that aren't in suggestions
-  const extraTopics = topics.filter((t) => !suggestions.includes(t));
 
   return (
     <>
       <div className="csm-backdrop" onClick={onClose} />
 
-      <div className="csm-container">
-        {/* Header */}
+      <div className="csm-container" role="dialog" aria-modal="true" aria-label="Custom Session Setup">
+
+        {/* ── Header ── */}
         <div className="csm-header">
           <div>
             <div className="csm-title">Custom Session</div>
             <div className="csm-subtitle">Configure your interview practice</div>
           </div>
-          <button className="csm-close" onClick={onClose}>✕</button>
+          <button className="csm-close" onClick={onClose} aria-label="Close">✕</button>
         </div>
 
-        {/* Steps */}
-        <div className="csm-steps">
-          {[
-            { n: 1, label: "Setup" },
-            { n: 2, label: "Topics" },
-            { n: 3, label: "Job Description" },
-          ].map(({ n, label }, idx, arr) => (
-            <>
-              <div key={n} className={`csm-step ${step >= n ? "active" : ""}`}>
-                <span className="csm-step-num">{n}</span>
-                <span className="csm-step-label">{label}</span>
+        {/* ── Step indicators ── */}
+        <div className="csm-steps" role="list" aria-label="Steps">
+          {(["Setup", "Topics", "Job Description"] as const).map((label, idx) => {
+            const n = idx + 1 as 1 | 2 | 3;
+            return (
+              <div key={n} style={{ display: "flex", alignItems: "center", flex: idx < 2 ? 1 : "none" }}>
+                <div className={`csm-step ${step >= n ? "active" : ""}`} role="listitem">
+                  <span className="csm-step-num">{n}</span>
+                  <span className="csm-step-label">{label}</span>
+                </div>
+                {idx < 2 && <div className="csm-step-line" />}
               </div>
-              {idx < arr.length - 1 && <div key={`line-${n}`} className="csm-step-line" />}
-            </>
-          ))}
+            );
+          })}
         </div>
 
-        {/* Body */}
+        {/* ── Body ── */}
         <div className="csm-body">
 
-          {/* ── Step 1: Setup ── */}
+          {/* ────────────── Step 1: Setup ────────────── */}
           {step === 1 && (
             <div className="csm-step-content">
+
               <div className="csm-field">
-                <label className="csm-label">Session Title</label>
-                <input className="csm-input" placeholder="e.g. Google SWE Mock Round 1" value={title} onChange={(e) => setTitle(e.target.value)} />
+                <label className="csm-label">Role / Session Title</label>
+                <input
+                  className="csm-input"
+                  placeholder="e.g. Senior Software Engineer at Google"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  autoFocus
+                />
               </div>
 
               <div className="csm-field">
                 <label className="csm-label">Interview Type</label>
                 <div className="csm-type-grid">
                   {INTERVIEW_TYPES.map((t) => (
-                    <button key={t.value} className={`csm-type-card ${type === t.value ? "selected" : ""}`} onClick={() => { setType(t.value); setTopics([]); setJdTopics([]); }}>
-                      <span className="csm-type-icon">{t.icon}</span>
+                    <button
+                      key={t.value}
+                      className={`csm-type-card ${type === t.value ? "selected" : ""}`}
+                      onClick={() => { setType(t.value); setTopics([]); }}
+                    >
                       <span className="csm-type-name">{t.label}</span>
                       <span className="csm-type-desc">{t.desc}</span>
                     </button>
@@ -202,7 +254,11 @@ ${jdText}`,
                 <label className="csm-label">Difficulty</label>
                 <div className="csm-diff-row">
                   {DIFFICULTIES.map((d) => (
-                    <button key={d.value} className={`csm-diff-btn csm-diff-${d.value.toLowerCase()} ${difficulty === d.value ? "selected" : ""}`} onClick={() => setDifficulty(d.value)}>
+                    <button
+                      key={d.value}
+                      className={`csm-diff-btn csm-diff-${d.value} ${difficulty === d.value ? "selected" : ""}`}
+                      onClick={() => setDifficulty(d.value)}
+                    >
                       {d.label}
                     </button>
                   ))}
@@ -211,40 +267,61 @@ ${jdText}`,
 
               <div className="csm-field">
                 <label className="csm-label">
-                  Number of Questions <span className="csm-count-badge">{questionCount}</span>
+                  Number of Questions&nbsp;
+                  <span className="csm-count-badge">{questionCount}</span>
                 </label>
-                <input type="range" min={3} max={15} value={questionCount} onChange={(e) => setQuestionCount(Number(e.target.value))} className="csm-range" />
-                <div className="csm-range-labels"><span>3</span><span>9</span><span>15</span></div>
+                <input
+                  type="range" min={3} max={15} step={1}
+                  value={questionCount}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setQuestionCount(v);
+                    e.target.style.setProperty("--val", `${((v - 3) / 12) * 100}%`);
+                  }}
+                  style={{ "--val": `${((questionCount - 3) / 12) * 100}%` } as React.CSSProperties}
+                  className="csm-range"
+                />
+                <div className="csm-range-labels">
+                  <span>3</span><span>9</span><span>15</span>
+                </div>
               </div>
             </div>
           )}
 
-          {/* ── Step 2: Topics ── */}
+          {/* ────────────── Step 2: Topics ────────────── */}
           {step === 2 && (
             <div className="csm-step-content">
+
               <div className="csm-field">
-                <label className="csm-label">Focus Topics <span className="csm-optional">(optional)</span></label>
+                <label className="csm-label">
+                  Focus Topics <span className="csm-optional">(optional — helps AI prioritise)</span>
+                </label>
                 <div className="csm-chips">
                   {suggestions.map((t) => (
-                    <button key={t} className={`csm-chip ${topics.includes(t) ? "selected" : ""}`} onClick={() => toggleTopic(t)}>{t}</button>
+                    <button
+                      key={t}
+                      className={`csm-chip ${topics.includes(t) ? "selected" : ""}`}
+                      onClick={() => toggleTopic(t)}
+                    >
+                      {t}
+                    </button>
                   ))}
                 </div>
               </div>
 
-              {/* Custom topic input */}
               <div className="csm-field">
-                <label className="csm-label">Add Your Own Topic</label>
-                <div style={{ display: "flex", gap: "0.5rem" }}>
+                <label className="csm-label">Add Custom Topic</label>
+                <div style={{ display: "flex", gap: "8px" }}>
                   <input
                     className="csm-input"
-                    placeholder="e.g. Kafka, Redis, Segment Trees..."
+                    placeholder="e.g. Kafka, Redis, Segment Trees…"
                     value={customTopic}
                     onChange={(e) => setCustomTopic(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && addCustomTopic()}
                   />
                   <button
                     className="csm-btn-primary"
-                    style={{ padding: "0 1rem", flexShrink: 0 }}
+                    style={{ padding: "0 16px", flexShrink: 0, boxShadow: "none" }}
                     onClick={addCustomTopic}
                     disabled={!customTopic.trim()}
                   >
@@ -253,7 +330,6 @@ ${jdText}`,
                 </div>
               </div>
 
-              {/* Show custom/extra topics as removable chips */}
               {extraTopics.length > 0 && (
                 <div className="csm-field">
                   <label className="csm-label">Your Custom Topics</label>
@@ -262,10 +338,11 @@ ${jdText}`,
                       <button
                         key={t}
                         className="csm-chip selected"
-                        onClick={() => removeCustomTopic(t)}
-                        style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}
+                        onClick={() => setTopics((prev) => prev.filter((x) => x !== t))}
+                        style={{ display: "flex", alignItems: "center", gap: "5px" }}
                       >
-                        {t} <span style={{ opacity: 0.6, fontSize: "0.7rem" }}>✕</span>
+                        {t}
+                        <span style={{ opacity: 0.5, fontSize: "0.65rem" }}>✕</span>
                       </button>
                     ))}
                   </div>
@@ -273,90 +350,128 @@ ${jdText}`,
               )}
 
               <div className="csm-field">
-                <label className="csm-label">Additional Notes <span className="csm-optional">(optional)</span></label>
-                <textarea className="csm-textarea" placeholder="Any specific areas, weak points, or notes for the AI..." rows={3} value={description} onChange={(e) => setDescription(e.target.value)} />
+                <label className="csm-label">
+                  Candidate Notes <span className="csm-optional">(optional)</span>
+                </label>
+                <textarea
+                  className="csm-textarea"
+                  placeholder="Weak points, specific areas to focus on, anything the AI should know about you…"
+                  rows={3}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                />
               </div>
             </div>
           )}
 
-          {/* ── Step 3: Job Description ── */}
+          {/* ────────────── Step 3: JD + Review ────────────── */}
           {step === 3 && (
             <div className="csm-step-content">
+
               <div className="csm-field">
                 <label className="csm-label">
-                  Paste Job Description
-                  <span className="csm-optional" style={{ marginLeft: "0.4rem" }}>(optional)</span>
+                  Job Description <span className="csm-optional">(optional)</span>
                 </label>
-                <p style={{ fontSize: "0.78rem", color: "var(--text-2)", marginBottom: "0.75rem", marginTop: "0.25rem" }}>
-                  AI will read the JD and automatically suggest relevant topics to prepare for this specific role.
+                <p className="csm-jd-hint">
+                  AI reads the JD and automatically tailors every question to this specific role and company.
                 </p>
                 <textarea
                   className="csm-textarea"
-                  placeholder="Paste the full job description here..."
-                  rows={7}
+                  placeholder="Paste the full job description here…"
+                  rows={6}
                   value={jdText}
-                  onChange={(e) => { setJdText(e.target.value); setJdTopics([]); }}
+                  onChange={(e) => setJdText(e.target.value)}
                 />
-                <button
-                  className="csm-btn-primary"
-                  style={{ marginTop: "0.75rem" }}
-                  onClick={parseJD}
-                  disabled={!jdText.trim() || jdParsing}
-                >
-                  {jdParsing ? "Analyzing…" : "✦ Extract Topics with AI"}
-                </button>
               </div>
 
-              {/* AI extracted topics */}
-              {jdTopics.length > 0 && (
-                <div className="csm-field">
-                  <label className="csm-label">AI-Suggested Topics</label>
-                  <p style={{ fontSize: "0.78rem", color: "var(--text-2)", marginBottom: "0.6rem" }}>
-                    These have been added to your session. Deselect any you don't want.
-                  </p>
-                  <div className="csm-chips">
-                    {jdTopics.map((t) => (
-                      <button
-                        key={t}
-                        className={`csm-chip ${topics.includes(t) ? "selected" : ""}`}
-                        onClick={() => toggleTopic(t)}
-                        style={{ display: "flex", alignItems: "center", gap: "0.35rem" }}
-                      >
-                        <span style={{ fontSize: "0.65rem", opacity: 0.7 }}>✦</span> {t}
-                      </button>
-                    ))}
+              <div className="csm-field">
+                <label className="csm-label">Session Summary</label>
+                <div className="csm-summary">
+                  <div className="csm-summary-row">
+                    <span>Role</span>
+                    <span>{title}</span>
                   </div>
+                  <div className="csm-summary-row">
+                    <span>Type</span>
+                    <span>{INTERVIEW_TYPES.find((t) => t.value === type)?.label ?? type}</span>
+                  </div>
+                  <div className="csm-summary-row">
+                    <span>Difficulty</span>
+                    <span style={{
+                      color: difficulty === "easy" ? "#4ade80"
+                           : difficulty === "hard" ? "#f87171"
+                           : "#fbbf24",
+                    }}>
+                      {difficulty ? difficulty.charAt(0).toUpperCase() + difficulty.slice(1) : "—"}
+                    </span>
+                  </div>
+                  <div className="csm-summary-row">
+                    <span>Questions</span>
+                    <span>{questionCount}</span>
+                  </div>
+                  {topics.length > 0 && (
+                    <div className="csm-summary-row">
+                      <span>Topics</span>
+                      <span style={{ maxWidth: "60%", lineHeight: 1.5 }}>{topics.join(", ")}</span>
+                    </div>
+                  )}
+                  {notes.trim() && (
+                    <div className="csm-summary-row">
+                      <span>Notes</span>
+                      <span style={{ color: "#4ade80" }}>✓ Added</span>
+                    </div>
+                  )}
+                  {jdText.trim() && (
+                    <div className="csm-summary-row">
+                      <span>Job Description</span>
+                      <span style={{ color: "#4ade80" }}>✓ Added</span>
+                    </div>
+                  )}
                 </div>
-              )}
-
-              {/* Final summary */}
-              <div className="csm-summary">
-                <div className="csm-summary-row"><span>Type</span><span>{type}</span></div>
-                <div className="csm-summary-row"><span>Difficulty</span><span>{difficulty}</span></div>
-                <div className="csm-summary-row"><span>Questions</span><span>{questionCount}</span></div>
-                {topics.length > 0 && (
-                  <div className="csm-summary-row"><span>Topics</span><span>{topics.join(", ")}</span></div>
-                )}
               </div>
+
+              {error && <div className="csm-error">{error}</div>}
             </div>
           )}
         </div>
 
-        {/* Footer */}
+        {/* ── Footer ── */}
         <div className="csm-footer">
           {step > 1 && (
-            <button className="csm-btn-back" onClick={() => setStep((s) => (s - 1) as 1 | 2 | 3)}>
+            <button
+              className="csm-btn-back"
+              onClick={() => setStep((s) => (s - 1) as 1 | 2 | 3)}
+              disabled={loading}
+            >
               ← Back
             </button>
           )}
-          {step < 3
-            ? <button className="csm-btn-primary" disabled={step === 1 ? !canProceed : false} onClick={() => setStep((s) => (s + 1) as 1 | 2 | 3)}>
+          {step < 3 ? (
+            <button
+              className="csm-btn-primary"
+              disabled={step === 1 ? !canNext : false}
+              onClick={() => setStep((s) => (s + 1) as 1 | 2 | 3)}
+            >
               Next →
             </button>
-            : <button className="csm-btn-primary" disabled={!canSubmit} onClick={handleSubmit}>
-              Start Session →
+          ) : (
+            <button
+              className="csm-btn-primary"
+              disabled={!canSubmit || loading}
+              onClick={handleStartInterview}
+            >
+              {loading ? (
+                <span style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" style={{ animation: "spin 0.8s linear infinite" }}>
+                    <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" strokeWidth="3"/>
+                    <path d="M12 2a10 10 0 0110 10" stroke="#fff" strokeWidth="3" strokeLinecap="round"/>
+                  </svg>
+                  Starting…
+                  <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+                </span>
+              ) : "Start Session →"}
             </button>
-          }
+          )}
         </div>
       </div>
     </>

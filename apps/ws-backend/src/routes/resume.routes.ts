@@ -10,4 +10,5 @@ router.post("/process-resume",authMiddleware, resumeController.processResume);
 router.post("/start-interview",authMiddleware, resumeController.startInterview);
 router.get(`/interview/:id/results`,authMiddleware,resumeController.interviewFeedback)
 router.post(`/interview/:id/complete`,authMiddleware,resumeController.storeNeon)
+router.get("/get-resume",authMiddleware,resumeController.getResumeStatus)
 export default router;
