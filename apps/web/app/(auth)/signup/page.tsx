@@ -1,30 +1,44 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { authClient } from "@repo/auth/client";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import "./style.css";
 
 export default function SignUpPage() {
-  const [email, setEmail]       = useState("");
   const [name, setName]         = useState("");
+  const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading]   = useState(false);
   const [focused, setFocused]   = useState<string | null>(null);
   const router = useRouter();
 
+  // ✅ Redirect already-logged-in users away from signup
+  useEffect(() => {
+    authClient.getSession().then(({ data }) => {
+      if (data?.session) router.push("/dashboard");
+    });
+  }, []);
+
   const handleEmailSignUp = async () => {
     setLoading(true);
     try {
       const { error } = await authClient.signUp.email({
+        name,
         email,
         password,
-        name,
-        callbackURL: "/dashboard/",
       });
       if (error) { alert(error.message); return; }
-      router.push("/dashboard/");
+      // ✅ After signup, sign them in immediately
+      const { error: signInError } = await authClient.signIn.email({
+        email,
+        password,
+        rememberMe: true,
+      });
+      if (signInError) { alert(signInError.message); return; }
+      router.refresh();
+      router.push("/dashboard");
     } catch (err) {
       console.error("Sign up error:", err);
     } finally {
@@ -33,49 +47,40 @@ export default function SignUpPage() {
   };
 
   const handleGoogleSignIn = async () => {
-    await authClient.signIn.social({ provider: "google", callbackURL: "/dashboard/" });
+    const { error } = await authClient.signIn.social({
+      provider: "google",
+      callbackURL: "/dashboard",
+    });
+    if (error) alert(error.message);
   };
+
   const handleGithubSignIn = async () => {
-    await authClient.signIn.social({ provider: "github", callbackURL: "/dashboard/" });
+    const { error } = await authClient.signIn.social({
+      provider: "github",
+      callbackURL: "/dashboard",
+    });
+    if (error) alert(error.message);
   };
 
   const fields = [
-    { id: "name",     label: "Full Name",     type: "text",     value: name,     setter: setName,     placeholder: "John Doe" },
-    { id: "email",    label: "Email Address", type: "email",    value: email,    setter: setEmail,    placeholder: "you@example.com" },
-    { id: "password", label: "Password",      type: "password", value: password, setter: setPassword, placeholder: "Min. 8 characters" },
+    { id: "name",     label: "Full Name",      type: "text",     value: name,     setter: setName,     placeholder: "John Doe" },
+    { id: "email",    label: "Email Address",  type: "email",    value: email,    setter: setEmail,    placeholder: "you@example.com" },
+    { id: "password", label: "Password",       type: "password", value: password, setter: setPassword, placeholder: "Min. 8 characters" },
   ];
 
   return (
     <>
       <div className="noise" />
-
       <div className="auth-page">
-        {/* ── LEFT PANEL ── */}
         <div className="left-panel">
           <div className="grid-overlay" />
-
-          {/* Top: Logo */}
-          <Link href="/" className="left-logo">
-            Interview<span>AI</span>
-          </Link>
-
-          {/* Middle: Hero — grows to fill space */}
+          <Link href="/" className="left-logo">Interview<span>AI</span></Link>
           <div className="left-hero">
-            
-            <h2>
-              Start your journey<br />to the <em>perfect offer</em>
-            </h2>
-            <p>
-              Create your account and get personalized mock interviews,
-              real-time feedback, and memory-driven coaching — all powered by AI.
-            </p>
+            <h2>Start your journey<br />to the <em>perfect offer</em></h2>
+            <p>Create your account and get personalized mock interviews, real-time feedback, and memory-driven coaching — all powered by AI.</p>
           </div>
-
-          {/* Bottom: Stat cards */}
-          
         </div>
 
-        {/* ── RIGHT PANEL ── */}
         <div className="right-panel">
           <div className="form-card">
             <h1 className="form-title">Create account</h1>
@@ -84,12 +89,8 @@ export default function SignUpPage() {
               <Link href="/login">Sign in instead →</Link>
             </p>
 
-            {/* Fields */}
             {fields.map((f) => (
-              <div
-                key={f.id}
-                className={`field${focused === f.id ? " focused" : ""}`}
-              >
+              <div key={f.id} className={`field${focused === f.id ? " focused" : ""}`}>
                 <label htmlFor={f.id}>{f.label}</label>
                 <div className="input-wrap">
                   <input
@@ -106,11 +107,7 @@ export default function SignUpPage() {
               </div>
             ))}
 
-            <button
-              className="btn-primary"
-              onClick={handleEmailSignUp}
-              disabled={loading}
-            >
+            <button className="btn-primary" onClick={handleEmailSignUp} disabled={loading}>
               {loading && <span className="spinner" />}
               {loading ? "Creating account…" : "Create account →"}
             </button>
@@ -135,9 +132,7 @@ export default function SignUpPage() {
             </button>
 
             <p className="terms">
-              By creating an account, you agree to our{" "}
-              <span>Terms of Service</span> and{" "}
-              <span>Privacy Policy</span>.
+              By creating an account, you agree to our <span>Terms of Service</span> and <span>Privacy Policy</span>.
             </p>
           </div>
         </div>

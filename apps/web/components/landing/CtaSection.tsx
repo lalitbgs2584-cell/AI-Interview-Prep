@@ -1,13 +1,11 @@
+"use client";
+
 import { BtnPrimary } from "../BtnPrimary";
-import { redirect } from "next/navigation";
+import { useRouter } from "next/navigation";
 
+export function CtaSection() {
+  const router = useRouter();
 
-export async function CtaSection() {
-
-
-  const handleEarlyAccess = async () => {
-    redirect("/login")
-  }
   return (
     <section style={{ padding: "9rem 2rem", textAlign: "center", position: "relative", overflow: "hidden" }}>
       <div style={{ position: "absolute", width: 700, height: 500, borderRadius: "50%", background: "radial-gradient(ellipse, rgba(0,229,176,0.06) 0%, transparent 70%)", top: "50%", left: "50%", transform: "translate(-50%, -50%)", pointerEvents: "none" }} />
@@ -18,7 +16,7 @@ export async function CtaSection() {
         <p style={{ color: "var(--muted)", fontSize: "1.1rem", maxWidth: 460, margin: "0 auto 3rem", lineHeight: 1.7 }}>
           Join early access and get your first 3 AI interviews completely free. No credit card required.
         </p>
-        <BtnPrimary onClick={handleEarlyAccess} large>Get Started</BtnPrimary>
+        <BtnPrimary onClick={() => router.push("/login")} large>Get Started</BtnPrimary>
       </div>
     </section>
   );

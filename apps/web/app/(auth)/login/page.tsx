@@ -6,37 +6,54 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import "./style.css";
 
-export default function SignUpPage() {
-  const [email, setEmail]       = useState("");
+export default function SignInPage() {
+  const [email, setEmail]     = useState("");
   const [password, setPassword] = useState("");
-  const [loading, setLoading]   = useState(false);
-  const [focused, setFocused]   = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [focused, setFocused] = useState<string | null>(null);
   const router = useRouter();
 
-  const handleEmailSignUp = async () => {
+  // ✅ useEffect at top level — redirects already-logged-in users
+  useEffect(() => {
+    authClient.getSession().then(({ data }) => {
+      if (data?.session) router.push("/dashboard");
+    });
+  }, []);
+
+  const handleEmailSignIn = async () => {
     setLoading(true);
     try {
       const { error } = await authClient.signIn.email({
         email,
         password,
         rememberMe: true,
-        callbackURL: "/dashboard",
       });
       if (error) { alert(error.message); return; }
+      // ✅ refresh flushes Next.js cache so session is picked up server-side
+      router.refresh();
       router.push("/dashboard");
     } catch (err) {
-      console.error("Sign up error:", err);
+      console.error("Sign in error:", err);
     } finally {
       setLoading(false);
     }
   };
 
   const handleGoogleSignIn = async () => {
-    await authClient.signIn.social({ provider: "google", callbackURL: "/dashboard/" });
+    const { error } = await authClient.signIn.social({
+      provider: "google",
+      callbackURL: "/dashboard",
+    });
+    if (error) alert(error.message);
   };
+
   const handleGithubSignIn = async () => {
-    await authClient.signIn.social({ provider: "github", callbackURL: "/dashboard" });
-  }; 
+    const { error } = await authClient.signIn.social({
+      provider: "github",
+      callbackURL: "/dashboard",
+    });
+    if (error) alert(error.message);
+  };
 
   const fields = [
     { id: "email",    label: "Email Address", type: "email",    value: email,    setter: setEmail,    placeholder: "you@example.com" },
@@ -46,46 +63,26 @@ export default function SignUpPage() {
   return (
     <>
       <div className="noise" />
-
       <div className="auth-page">
-        {/* ── LEFT PANEL ── */}
         <div className="left-panel">
           <div className="grid-overlay" />
-
-          {/* Top: Logo */}
-          <Link href="/" className="left-logo">
-            Interview<span>AI</span>
-          </Link>
-
-          {/* Middle: Hero — grows to fill space */}
+          <Link href="/" className="left-logo">Interview<span>AI</span></Link>
           <div className="left-hero">
-            <h2>
-              Start your journey<br />to the <em>perfect offer</em>
-            </h2>
-            <p>
-              Create your account and get personalized mock interviews,
-              real-time feedback, and memory-driven coaching — all powered by AI.
-            </p>
+            <h2>Welcome<br />back to <em>InterviewAI</em></h2>
+            <p>Sign in to continue your personalized mock interviews and AI-powered coaching.</p>
           </div>
-
-          
         </div>
 
-        {/* ── RIGHT PANEL ── */}
         <div className="right-panel">
           <div className="form-card">
-            <h1 className="form-title ">Login </h1>
+            <h1 className="form-title">Login</h1>
             <p className="form-sub">
               Don't have one?{" "}
               <Link href="/signup">Sign up instead →</Link>
             </p>
 
-            {/* Fields */}
             {fields.map((f) => (
-              <div
-                key={f.id}
-                className={`field${focused === f.id ? " focused" : ""}`}
-              >
+              <div key={f.id} className={`field${focused === f.id ? " focused" : ""}`}>
                 <label htmlFor={f.id}>{f.label}</label>
                 <div className="input-wrap">
                   <input
@@ -102,13 +99,9 @@ export default function SignUpPage() {
               </div>
             ))}
 
-            <button
-              className="btn-primary"
-              onClick={handleEmailSignUp}
-              disabled={loading}
-            >
+            <button className="btn-primary" onClick={handleEmailSignIn} disabled={loading}>
               {loading && <span className="spinner" />}
-              {loading ? "Logging in…" : "Sign In  →"}
+              {loading ? "Logging in…" : "Sign In →"}
             </button>
 
             <div className="divider">or continue with</div>
@@ -131,9 +124,7 @@ export default function SignUpPage() {
             </button>
 
             <p className="terms">
-              By Signing in, you agree to our{" "}
-              <span>Terms of Service</span> and{" "}
-              <span>Privacy Policy</span>.
+              By signing in, you agree to our <span>Terms of Service</span> and <span>Privacy Policy</span>.
             </p>
           </div>
         </div>
