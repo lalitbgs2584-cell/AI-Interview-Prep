@@ -100,7 +100,13 @@ subscriber.on("pmessage", async (pattern: string, channel: string, message: stri
             console.log(`  Summary:        ${summary.summary}`);
             console.log(`  Strengths:      ${summary.strengths.join(", ")}`);
             console.log(`  Weaknesses:     ${summary.weaknesses.join(", ")}`);
-
+            
+            await redisClient.set(
+                `interview:${interviewId}:summary`,
+                JSON.stringify(summary),
+                "EX",
+                60 * 60 * 24
+            );
             io.to(`interview:${interviewId}`).emit("interview:complete", {
                 interviewId,
                 summary,

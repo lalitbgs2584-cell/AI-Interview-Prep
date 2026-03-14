@@ -100,6 +100,12 @@ io.on("connection", (socket) => {
 
   socket.on("interview:end", async ({ interviewId }) => {
     await redisClient.set(
+      `interview:${interviewId}:ended`,
+      "1",
+      "EX",
+      3600
+    );
+    await redisClient.set(
       `interview:${interviewId}:latest_answer`,
       "__END__"
     );

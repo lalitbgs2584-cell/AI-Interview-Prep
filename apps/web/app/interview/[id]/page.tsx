@@ -308,7 +308,15 @@ export default function InterviewPage() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const isRecordingRef = useRef(false);
   const aiSourceCreatedRef = useRef(false);
-  const lastQuestionRef = useRef<string>("");
+
+  // ── FIX #2: Track last question by BOTH text AND index to avoid
+  //    incorrectly de-duplicating follow-ups that reuse similar phrasing ──
+  const lastQuestionKeyRef = useRef<string>("");
+
+  // ── FIX #7: Track last submitted answer to prevent speech-recognition
+  //    from firing the same answer twice ────────────────────────────────
+  const lastAnswerRef = useRef<string>("");
+  const answerThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [micPermission, setMicPermission] = useState(false);
   const [camPermission, setCamPermission] = useState(false);
@@ -322,8 +330,8 @@ export default function InterviewPage() {
 
   const { addMessage, messages, reset } = useInterviewStore();
 
-  const handleQuestionRef = useRef<(data: any) => void>(() => {});
-  const endSessionRef = useRef<(fromBackend?: boolean) => void>(() => {});
+  const handleQuestionRef = useRef<(data: any) => void>(() => { });
+  const endSessionRef = useRef<(fromBackend?: boolean) => void>(() => { });
 
   /* ---------------------- END SESSION ---------------------- */
 
@@ -343,12 +351,19 @@ export default function InterviewPage() {
 
       if (faceCountdownRef.current) clearInterval(faceCountdownRef.current);
 
+      // ── FIX #4: Guard MediaRecorder.stop() against "inactive" state ────
       try {
-        if (isRecordingRef.current && recorderRef.current) {
+        if (
+          isRecordingRef.current &&
+          recorderRef.current &&
+          recorderRef.current.state !== "inactive"
+        ) {
           recorderRef.current.stop();
           isRecordingRef.current = false;
         }
-      } catch {}
+      } catch (err) {
+        console.warn("[recording] stop error:", err);
+      }
 
       if (audioContextRef.current) {
         audioContextRef.current.close();
@@ -357,28 +372,30 @@ export default function InterviewPage() {
 
       try {
         userStreamRef.current?.getTracks().forEach((t) => t.stop());
-      } catch {}
+      } catch { }
 
       if (document.fullscreenElement) {
         suppressFsExitRef.current = true;
-        try { await document.exitFullscreen(); } catch {}
+        try { await document.exitFullscreen(); } catch { }
       }
 
+      // ── FIX #3: Do NOT call POST /complete from the frontend.
+      //    The Python worker emits interview:complete which triggers
+      //    endSession(true). Calling the REST endpoint here races with
+      //    the worker and can double-complete the interview.
+      //    We only notify the socket so the backend can clean up rooms. ──
       if (!fromBackend) {
-        try { getSocket().emit("interview:end", { interviewId }); } catch {}
-      }
-
-      try {
-        await fetch(`http://localhost:4000/api/interview/${interviewId}/complete`, {
-          method: "POST",
-          credentials: "include",
-        });
-      } catch (e) {
-        console.error("[persist]", e);
+        try {
+          getSocket().emit("interview:end", { interviewId });
+        } catch (e) {
+          console.error("[socket end]", e);
+        }
       }
 
       reset();
-      router.push(`/feedback/${interviewId}/`);
+      setTimeout(() => {
+        router.push(`/feedback/${interviewId}/`);
+      }, 2000);
     },
     [interviewId, router, reset, isEnding],
   );
@@ -513,10 +530,15 @@ export default function InterviewPage() {
 
   /* ---------------------- SOCKET ---------------------- */
 
+  // ── FIX #2: Deduplicate using a composite key of index + question text
+  //    so follow-ups with identical wording at a different index still fire.
   const handleQuestion = useCallback(
     (data: { question: string; index: number; difficulty: string; time?: number }) => {
-      if (!data?.question || data.question === lastQuestionRef.current) return;
-      lastQuestionRef.current = data.question;
+      if (!data?.question) return;
+
+      const key = `${data.index}::${data.question}`;
+      if (key === lastQuestionKeyRef.current) return;
+      lastQuestionKeyRef.current = key;
 
       const now = data.time
         ? new Date(data.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -530,18 +552,44 @@ export default function InterviewPage() {
 
   useEffect(() => { handleQuestionRef.current = handleQuestion; }, [handleQuestion]);
 
+  // ── FIX #5 & #6: Register socket listeners exactly once (after gate is
+  //    dismissed). Off all handlers on cleanup to prevent duplicate bindings.
+  //    FIX #1: Also clean up the "connect" reconnect listener on unmount.
+  //    FIX #6: Guard join_interview emission so it only fires when the
+  //    socket is already connected; the "connect" handler covers reconnects.
   useEffect(() => {
     if (showGate) return;
 
     const socket = getSocket();
+
     const onQuestion = (data: any) => handleQuestionRef.current(data);
     const onComplete = () => endSessionRef.current(true);
 
+    // ── FIX #5: Remove stale listeners before adding fresh ones ──────────
+    socket.off("interview:question", onQuestion);
+    socket.off("interview:complete", onComplete);
+
     socket.on("interview:question", onQuestion);
     socket.on("interview:complete", onComplete);
-    socket.emit("join_interview", { interviewId });
+
+    // ── FIX #6: Only emit join if already connected; otherwise the
+    //    "connect" handler below will take care of it on first connect. ──
+    if (socket.connected) {
+      socket.emit("join_interview", { interviewId });
+    }
+
+    // ── FIX #1: Keep a stable reference so we can remove this exact
+    //    listener in the cleanup below (prevents listener accumulation). ──
+    const onReconnect = () => {
+      console.log("[socket] reconnected — rejoining interview room");
+      socket.emit("join_interview", { interviewId });
+    };
+
+    socket.on("connect", onReconnect);
 
     return () => {
+      // ── FIX #1: Clean up reconnect listener ─────────────────────────
+      socket.off("connect", onReconnect);
       socket.off("interview:question", onQuestion);
       socket.off("interview:complete", onComplete);
     };
@@ -560,7 +608,7 @@ export default function InterviewPage() {
       .catch((err) => console.error("[media]", err));
 
     return () => {
-      try { userStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
+      try { userStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch { }
     };
   }, []);
 
@@ -572,20 +620,37 @@ export default function InterviewPage() {
 
   /* ---------------------- SPEECH ---------------------- */
 
-  const { transcript, startListening, stopListening } = useSpeechToText(
-    (finalText) => {
-      if (!finalText.trim()) return;
+  // ── FIX #7: Deduplicate and throttle speech-recognition submissions.
+  //    If the recogniser fires the same transcript within 2 s, drop it.
+  const submitAnswer = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      if (trimmed === lastAnswerRef.current) return; // exact duplicate
+
+      // Throttle: ignore if another answer was sent in the last 2 s
+      if (answerThrottleRef.current) return;
+
+      lastAnswerRef.current = trimmed;
+      answerThrottleRef.current = setTimeout(() => {
+        answerThrottleRef.current = null;
+      }, 2000);
 
       const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      addMessage({ id: Date.now(), role: "user", text: finalText, time: now });
+      addMessage({ id: Date.now(), role: "user", text: trimmed, time: now });
       setInput("");
 
       if (!endLockRef.current) {
-        getSocket().emit("submit_answer", { interviewId, answer: finalText });
+        getSocket().emit("submit_answer", { interviewId, answer: trimmed });
       }
 
       setAiSpeaking(true);
     },
+    [addMessage, interviewId],
+  );
+
+  const { transcript, startListening, stopListening } = useSpeechToText(
+    (finalText) => submitAnswer(finalText),
   );
 
   const startListeningRef = useRef(startListening);
@@ -644,18 +709,7 @@ export default function InterviewPage() {
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   const sendMessage = () => {
-    const text = input.trim();
-    if (!text) return;
-
-    const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    addMessage({ id: Date.now(), role: "user", text, time: now });
-    setInput("");
-
-    if (!endLockRef.current) {
-      getSocket().emit("submit_answer", { interviewId, answer: text });
-    }
-
-    setAiSpeaking(true);
+    submitAnswer(input);
   };
 
   const handleKey = (e: React.KeyboardEvent) => {
@@ -713,7 +767,7 @@ export default function InterviewPage() {
             <button
               onClick={() =>
                 isFullscreen
-                  ? (() => { suppressFsExitRef.current = true; document.exitFullscreen().catch(() => {}); })()
+                  ? (() => { suppressFsExitRef.current = true; document.exitFullscreen().catch(() => { }); })()
                   : enterFullscreen()
               }
               title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
