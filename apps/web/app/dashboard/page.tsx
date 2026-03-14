@@ -6,13 +6,18 @@
   import DashboardApp from "@/components/dashboard/dashboard-components/pages/DashboardApp";
 
   export default async function DashboardPage() {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
+    let session = null;
+     try {
+      session = await auth.api.getSession({
+       headers: await headers(),
+     });
+     } catch (error) {
+      
+     }
 
     if (!session) {
       redirect("/login");
     }
     console.log(session)
-    return <DashboardApp user={session.user} />;
+    return <DashboardApp user={session?.user} />;
   }
