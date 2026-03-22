@@ -6,12 +6,14 @@
       "@/*": ["./*"],
       "@workspace/ui/*": ["../../packages/ui/src/*"]
     },
+    "typeRoots": ["./node_modules/@types"],
     "plugins": [
       {
         "name": "next"
       }
     ]
   },
+  
   "include": [
     "next-env.d.ts",
     "next.config.ts",

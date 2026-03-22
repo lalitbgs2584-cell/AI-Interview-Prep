@@ -202,62 +202,145 @@ function FaceStatusBanner({ status }: { status: "no-face" | "multiple" }) {
   );
 }
 
-/* ---------------------- FACE DETECTION HOOK ---------------------- */
+/* ---------------------- FACE DETECTION HOOK (MediaPipe) ---------------------- */
 
 type FaceStatus = "ok" | "no-face" | "multiple";
 
-function useFaceDetection(videoRef: React.RefObject<HTMLVideoElement | null>, enabled: boolean) {
+function useFaceDetection(
+  videoRef: React.RefObject<HTMLVideoElement | null>,
+  enabled: boolean
+) {
   const [status, setStatus] = useState<FaceStatus>("ok");
   const [count, setCount] = useState(1);
   const [modelsReady, setModelsReady] = useState(false);
-  const badFrames = useRef(0);
-  const statusRef = useRef<FaceStatus>("ok");
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const POLL_MS = 600;
-  const GRACE_FRAMES = 3;
 
+  // Typed properly — no `any` on the detector itself
+  const detectorRef = useRef<{
+    detectForVideo: (video: HTMLVideoElement, timestamp: number) => { detections: unknown[] };
+    close: () => void;
+  } | null>(null);
+  const statusRef = useRef<FaceStatus>("ok");
+  const badFrames = useRef(0);
+  const animFrameRef = useRef<number | null>(null);
+  const lastVideoTime = useRef(-1);
+  const lastPollTime = useRef(0);
+
+  const GRACE_FRAMES = 3;
+  const POLL_INTERVAL_MS = 600;
+
+  // ── Load MediaPipe FaceDetector once ──────────────────────────────────────
   useEffect(() => {
-    import("face-api.js").then((faceapi) => {
-      faceapi.nets.tinyFaceDetector.loadFromUri("/models")
-        .then(() => setModelsReady(true))
-        .catch((err) => console.warn("[face-api] Load failed:", err));
-    });
+    let cancelled = false;
+
+    async function loadModel() {
+      try {
+        const { FaceDetector, FilesetResolver } = await import(
+          "@mediapipe/tasks-vision"
+        );
+
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+        );
+
+        const detector = await FaceDetector.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+            delegate: "GPU",
+          },
+          runningMode: "VIDEO",
+          minDetectionConfidence: 0.45,
+          minSuppressionThreshold: 0.3,
+        });
+
+        if (!cancelled) {
+          detectorRef.current = detector;
+          setModelsReady(true);
+        }
+      } catch (err) {
+        console.warn("[MediaPipe FaceDetector] Load failed:", err);
+      }
+    }
+
+    loadModel();
+    return () => { cancelled = true; };
   }, []);
 
+  // ── Detection loop ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!modelsReady || !enabled) {
-      badFrames.current = 0; statusRef.current = "ok"; setStatus("ok"); return;
+      badFrames.current = 0;
+      statusRef.current = "ok";
+      setStatus("ok");
+      if (animFrameRef.current !== null) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      return;
     }
+
     let cancelled = false;
-    const tick = async () => {
+
+    const tick = (now: number) => {
       if (cancelled) return;
-      const video = videoRef.current;
-      if (!video || video.readyState < 2 || video.paused || video.videoWidth === 0) return;
-      try {
-        const faceapi = await import("face-api.js");
-        const vw = video.videoWidth, vh = video.videoHeight;
-        if (!canvasRef.current) canvasRef.current = document.createElement("canvas");
-        const canvas = canvasRef.current;
-        if (canvas.width !== vw || canvas.height !== vh) { canvas.width = vw; canvas.height = vh; }
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-        ctx.drawImage(video, 0, 0, vw, vh);
-        const detections = await faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 }));
-        if (cancelled) return;
-        const n = detections.length;
-        setCount(n);
-        const raw: FaceStatus = n === 0 ? "no-face" : n > 1 ? "multiple" : "ok";
-        if (raw !== "ok") {
-          badFrames.current += 1;
-          if (badFrames.current >= GRACE_FRAMES && statusRef.current !== raw) { statusRef.current = raw; setStatus(raw); }
-        } else {
-          badFrames.current = 0;
-          if (statusRef.current !== "ok") { statusRef.current = "ok"; setStatus("ok"); }
+
+      if (now - lastPollTime.current >= POLL_INTERVAL_MS) {
+        lastPollTime.current = now;
+
+        const video = videoRef.current;
+        const detector = detectorRef.current;
+
+        if (
+          video &&
+          detector &&
+          video.readyState >= 2 &&
+          !video.paused &&
+          video.videoWidth > 0 &&
+          video.currentTime !== lastVideoTime.current
+        ) {
+          lastVideoTime.current = video.currentTime;
+
+          try {
+            const result = detector.detectForVideo(video, performance.now());
+            const n = result.detections.length;
+            setCount(n);
+
+            const raw: FaceStatus =
+              n === 0 ? "no-face" : n > 1 ? "multiple" : "ok";
+
+            if (raw !== "ok") {
+              badFrames.current += 1;
+              if (badFrames.current >= GRACE_FRAMES && statusRef.current !== raw) {
+                statusRef.current = raw;
+                setStatus(raw);
+              }
+            } else {
+              badFrames.current = 0;
+              if (statusRef.current !== "ok") {
+                statusRef.current = "ok";
+                setStatus("ok");
+              }
+            }
+          } catch {
+            // swallow per-frame errors silently
+          }
         }
-      } catch { /* swallow */ }
+      }
+
+      animFrameRef.current = requestAnimationFrame(tick);
     };
-    const intervalId = setInterval(tick, POLL_MS);
-    return () => { cancelled = true; clearInterval(intervalId); badFrames.current = 0; statusRef.current = "ok"; };
+
+    animFrameRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      cancelled = true;
+      if (animFrameRef.current !== null) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      badFrames.current = 0;
+      statusRef.current = "ok";
+    };
   }, [modelsReady, enabled, videoRef]);
 
   return { status, count, modelsReady };
@@ -309,12 +392,7 @@ export default function InterviewPage() {
   const isRecordingRef = useRef(false);
   const aiSourceCreatedRef = useRef(false);
 
-  // ── FIX #2: Track last question by BOTH text AND index to avoid
-  //    incorrectly de-duplicating follow-ups that reuse similar phrasing ──
   const lastQuestionKeyRef = useRef<string>("");
-
-  // ── FIX #7: Track last submitted answer to prevent speech-recognition
-  //    from firing the same answer twice ────────────────────────────────
   const lastAnswerRef = useRef<string>("");
   const answerThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -323,6 +401,7 @@ export default function InterviewPage() {
 
   const timer = useTimer(sessionRunning);
 
+  // ── MediaPipe-based face detection (replaces face-api.js) ────────────────
   const { status: faceStatus, count: faceCount, modelsReady } = useFaceDetection(
     userVideoRef,
     camOn && camPermission && sessionRunning && !isEnding,
@@ -351,7 +430,6 @@ export default function InterviewPage() {
 
       if (faceCountdownRef.current) clearInterval(faceCountdownRef.current);
 
-      // ── FIX #4: Guard MediaRecorder.stop() against "inactive" state ────
       try {
         if (
           isRecordingRef.current &&
@@ -379,11 +457,6 @@ export default function InterviewPage() {
         try { await document.exitFullscreen(); } catch { }
       }
 
-      // ── FIX #3: Do NOT call POST /complete from the frontend.
-      //    The Python worker emits interview:complete which triggers
-      //    endSession(true). Calling the REST endpoint here races with
-      //    the worker and can double-complete the interview.
-      //    We only notify the socket so the backend can clean up rooms. ──
       if (!fromBackend) {
         try {
           getSocket().emit("interview:end", { interviewId });
@@ -530,8 +603,6 @@ export default function InterviewPage() {
 
   /* ---------------------- SOCKET ---------------------- */
 
-  // ── FIX #2: Deduplicate using a composite key of index + question text
-  //    so follow-ups with identical wording at a different index still fire.
   const handleQuestion = useCallback(
     (data: { question: string; index: number; difficulty: string; time?: number }) => {
       if (!data?.question) return;
@@ -552,11 +623,6 @@ export default function InterviewPage() {
 
   useEffect(() => { handleQuestionRef.current = handleQuestion; }, [handleQuestion]);
 
-  // ── FIX #5 & #6: Register socket listeners exactly once (after gate is
-  //    dismissed). Off all handlers on cleanup to prevent duplicate bindings.
-  //    FIX #1: Also clean up the "connect" reconnect listener on unmount.
-  //    FIX #6: Guard join_interview emission so it only fires when the
-  //    socket is already connected; the "connect" handler covers reconnects.
   useEffect(() => {
     if (showGate) return;
 
@@ -565,21 +631,16 @@ export default function InterviewPage() {
     const onQuestion = (data: any) => handleQuestionRef.current(data);
     const onComplete = () => endSessionRef.current(true);
 
-    // ── FIX #5: Remove stale listeners before adding fresh ones ──────────
     socket.off("interview:question", onQuestion);
     socket.off("interview:complete", onComplete);
 
     socket.on("interview:question", onQuestion);
     socket.on("interview:complete", onComplete);
 
-    // ── FIX #6: Only emit join if already connected; otherwise the
-    //    "connect" handler below will take care of it on first connect. ──
     if (socket.connected) {
       socket.emit("join_interview", { interviewId });
     }
 
-    // ── FIX #1: Keep a stable reference so we can remove this exact
-    //    listener in the cleanup below (prevents listener accumulation). ──
     const onReconnect = () => {
       console.log("[socket] reconnected — rejoining interview room");
       socket.emit("join_interview", { interviewId });
@@ -588,7 +649,6 @@ export default function InterviewPage() {
     socket.on("connect", onReconnect);
 
     return () => {
-      // ── FIX #1: Clean up reconnect listener ─────────────────────────
       socket.off("connect", onReconnect);
       socket.off("interview:question", onQuestion);
       socket.off("interview:complete", onComplete);
@@ -620,15 +680,12 @@ export default function InterviewPage() {
 
   /* ---------------------- SPEECH ---------------------- */
 
-  // ── FIX #7: Deduplicate and throttle speech-recognition submissions.
-  //    If the recogniser fires the same transcript within 2 s, drop it.
   const submitAnswer = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      if (trimmed === lastAnswerRef.current) return; // exact duplicate
+      if (trimmed === lastAnswerRef.current) return;
 
-      // Throttle: ignore if another answer was sent in the last 2 s
       if (answerThrottleRef.current) return;
 
       lastAnswerRef.current = trimmed;
@@ -708,9 +765,7 @@ export default function InterviewPage() {
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
-  const sendMessage = () => {
-    submitAnswer(input);
-  };
+  const sendMessage = () => { submitAnswer(input); };
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -724,10 +779,8 @@ export default function InterviewPage() {
     <>
       <div className="noise" />
 
-      {/* One-click fullscreen gate */}
       {showGate && <FullscreenGate onEnter={handleGateEnter} />}
 
-      {/* Fullscreen exit warnings */}
       {!showGate && showFsWarning && (
         <FullscreenWarningModal count={fsWarningCount} onReenter={handleReenterFullscreen} />
       )}
@@ -763,7 +816,6 @@ export default function InterviewPage() {
           </div>
 
           <div className="topbar-right">
-            {/* Manual fullscreen toggle */}
             <button
               onClick={() =>
                 isFullscreen
