@@ -13,5 +13,7 @@ router.get("/interview/history",  authMiddleware, resumeController.interviewHist
 router.get("/interview/:id/results",  authMiddleware, resumeController.interviewFeedback);
 router.post("/interview/:id/complete", authMiddleware, resumeController.storeNeon);
 router.get("/get-resume",         authMiddleware, resumeController.getResumeStatus);
+router.post("/generate-interview-plan",authMiddleware,resumeController.generateInterviewPlan)
+router.get("/skills-insights",authMiddleware,resumeController.getSkillsInsights)
 
 export default router;

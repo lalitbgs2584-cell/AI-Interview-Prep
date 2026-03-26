@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import "@/components/dashboard/dashboard.css";
+import "@/components/dashboard/dashboard-components/styles/index.css";
 
 export const metadata: Metadata = {
   title: "InterviewAI — Dashboard",

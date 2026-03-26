@@ -1038,7 +1038,6 @@ def get_skill_dimensions(interview_type: str) -> List[str]:
     key = (interview_type or "").strip().lower()
     return SKILL_SCORE_DIMENSIONS.get(key, SKILL_SCORE_DIMENSIONS["default"])
 
-
 def finalize(state: InterviewState) -> dict:
     print("[finalize] started")
     interview_id     = state.get("interview_id")
@@ -1066,6 +1065,8 @@ def finalize(state: InterviewState) -> dict:
             "difficulty": h.get("difficulty", "unknown"),
             "question":   h.get("question", ""),
             "feedback":   h.get("feedback", ""),
+            # NEW — per-question verdict populated by the finalize LLM below
+            "verdict":    "",
             "timestamp":  h.get("timestamp", 0),
         }
         for i, h in enumerate(history)
@@ -1081,8 +1082,8 @@ def finalize(state: InterviewState) -> dict:
             "overall_score":    0,
             "recommendation":   "Insufficient data",
             "summary":          "No questions were answered.",
-            "strengths":        [],
-            "weaknesses":       [],
+            "what_went_right":  [],
+            "what_went_wrong":  [],
             "tips":             [],
             "skill_scores":     {},
             "question_scores":  [],
@@ -1106,59 +1107,106 @@ def finalize(state: InterviewState) -> dict:
         )
 
         evaluation_criteria = (
-            "Evaluate purely on BEHAVIORAL and interpersonal dimensions. "
-            "Do NOT mention technical skills. Focus on communication quality, "
-            "self-awareness, use of STAR structure, leadership, and culture fit."
+            "Evaluate purely on BEHAVIORAL dimensions: communication, STAR structure, "
+            "self-awareness, leadership, culture fit. Zero technical content."
             if human_round else
             "Evaluate on technical accuracy, depth, communication, and problem-solving."
         )
 
-        prompt = f"""You are summarizing a completed {interview_type} interview for role: {role}.
-Candidate: {candidate_name}
+        # Build a compact Q&A block for the prompt
+        qa_block = ""
+        for i, h in enumerate(history):
+            qa_block += (
+                f"Q{i+1} [{h.get('difficulty','?')}]: {h.get('question','')}\n"
+                f"Answer: {h.get('answer','(no answer)')}\n"
+                f"Score: {h.get('score',0)}/10\n\n"
+            )
+
+        prompt = f"""You are a strict, honest interview evaluator. Be specific — reference what the candidate actually said.
+Never use generic phrases like "good job", "needs improvement", or "the candidate".
+Always say "you" when addressing the candidate.
+
+Role: {role} | Type: {interview_type} | Candidate: {candidate_name}
 {extra_context_lines}
 
 {evaluation_criteria}
 
-Interview Q&A history (scores are 0-10):
-{json.dumps(history, indent=2)[:4000]}
+Full Q&A (scores 0-10):
+{qa_block[:4000]}
 
 Average score: {avg_score_10}/10
 
-Return ONLY valid JSON with this EXACT structure (no extra keys, no markdown):
+Return ONLY valid JSON — no markdown, no extra keys:
 {{
-  "summary": "<2-3 sentence narrative of overall performance>",
+  "overall_score": <integer 0-100, weighted by difficulty>,
   "recommendation": "<Hire | Strong Hire | No Hire | Needs More Evaluation>",
-  "strengths": [
-    "<specific strength observed, 1 sentence>",
-    "<specific strength observed, 1 sentence>",
-    "<specific strength observed, 1 sentence>"
+
+  "summary": "<2 sentences MAX. First: what you demonstrated overall. Second: the single biggest gap.>",
+
+  "what_went_right": [
+    {{ "point": "<specific thing you said or did correctly — under 20 words>", "tag": "<Core|Design|Clarity|Speed|Structure|STAR>" }},
+    {{ "point": "<specific thing you said or did correctly — under 20 words>", "tag": "<Core|Design|Clarity|Speed|Structure|STAR>" }},
+    {{ "point": "<specific thing you said or did correctly — under 20 words>", "tag": "<Core|Design|Clarity|Speed|Structure|STAR>" }}
   ],
-  "weaknesses": [
-    "<specific area to improve, 1 sentence>",
-    "<specific area to improve, 1 sentence>"
+
+  "what_went_wrong": [
+    {{ "point": "<specific gap or mistake — name the concept you missed — under 20 words>", "tag": "<Gap|Depth|Pace|Structure|STAR>" }},
+    {{ "point": "<specific gap or mistake — name the concept you missed — under 20 words>", "tag": "<Gap|Depth|Pace|Structure|STAR>" }},
+    {{ "point": "<specific gap or mistake — name the concept you missed — under 20 words>", "tag": "<Gap|Depth|Pace|Structure|STAR>" }}
   ],
+
   "tips": [
-    "<actionable tip to improve, 1-2 sentences>",
-    "<actionable tip to improve, 1-2 sentences>"
+    "<actionable fix starting with a verb — under 20 words>",
+    "<actionable fix starting with a verb — under 20 words>",
+    "<actionable fix starting with a verb — under 20 words>"
   ],
+
   "skill_scores": {{
     {skill_scores_schema}
-  }}
+  }},
+
+  "question_verdicts": [
+    {{
+      "index": <0-based int matching the Q&A above>,
+      "verdict": "<1-2 sentences: what you answered correctly AND what was missing or vague>"
+    }}
+  ]
 }}
 
-Base every score on actual answers in the history. Be specific and honest.
-Return only the JSON object.
+Rules:
+- Every point in what_went_right/what_went_wrong MUST reference something from the actual answers above.
+- Tips must start with a verb (e.g. "Always mention...", "Lead with...", "Practice...").
+- question_verdicts must cover every question in the Q&A — same count.
+- No bullet points inside strings. No markdown.
 """
 
         try:
             result = llm_eval.invoke([HumanMessage(content=prompt)]).content
             parsed = safe_json_parse(result)
 
+            # Skill scores
             raw_skill_scores = parsed.get("skill_scores", {})
             skill_scores = {
                 k: max(0, min(100, int(v)))
                 for k, v in raw_skill_scores.items()
             }
+
+            # Merge per-question verdicts back into question_scores
+            verdicts = {v["index"]: v["verdict"] for v in parsed.get("question_verdicts", [])}
+            for qs in question_scores:
+                qs["verdict"] = verdicts.get(qs["index"], "")
+
+            # Sanitize what_went_right / what_went_wrong
+            def clean_points(raw):
+                if not isinstance(raw, list):
+                    return []
+                return [
+                    {
+                        "point": str(item.get("point", "")),
+                        "tag":   str(item.get("tag", "General")),
+                    }
+                    for item in raw if isinstance(item, dict)
+                ]
 
             summary_payload = {
                 "role":             role,
@@ -1166,20 +1214,15 @@ Return only the JSON object.
                 "candidate_name":   candidate_name,
                 "date_iso":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "duration_seconds": duration_seconds,
-                "overall_score":    max(
-                    0,
-                    min(
-                        100,
-                        round(float(parsed.get("overall_score", avg_score_100)))
-                        if "overall_score" in parsed
-                        else avg_score_100,
-                    ),
-                ),
+                "overall_score":    max(0, min(100, int(parsed.get("overall_score", avg_score_100)))),
                 "recommendation":   parsed.get("recommendation", "Needs More Evaluation"),
                 "summary":          parsed.get("summary", ""),
-                "strengths":        parsed.get("strengths", []),
-                "weaknesses":       parsed.get("weaknesses", []),
-                "tips":             parsed.get("tips", []),
+                "what_went_right":  clean_points(parsed.get("what_went_right", [])),
+                "what_went_wrong":  clean_points(parsed.get("what_went_wrong", [])),
+                # keep "weaknesses" alias so existing frontend doesn't break
+                "weaknesses":       [p["point"] for p in clean_points(parsed.get("what_went_wrong", []))],
+                "strengths":        [p["point"] for p in clean_points(parsed.get("what_went_right", []))],
+                "tips":             [t for t in parsed.get("tips", []) if isinstance(t, str)],
                 "skill_scores":     skill_scores,
                 "question_scores":  question_scores,
             }
@@ -1200,8 +1243,10 @@ Return only the JSON object.
                 "overall_score":    avg_score_100,
                 "recommendation":   "Needs More Evaluation",
                 "summary":          f"Interview completed with an average score of {avg_score_10}/10.",
-                "strengths":        [],
+                "what_went_right":  [],
+                "what_went_wrong":  [],
                 "weaknesses":       [],
+                "strengths":        [],
                 "tips":             [],
                 "skill_scores":     {},
                 "question_scores":  question_scores,
@@ -1221,8 +1266,8 @@ Return only the JSON object.
     try:
         memory_text = (
             f"Interview for {role}: {summary_payload['summary']} "
-            f"Strengths: {', '.join(summary_payload.get('strengths', []))}. "
-            f"Areas to improve: {', '.join(summary_payload.get('weaknesses', []))}. "
+            f"Went well: {', '.join(p['point'] for p in summary_payload.get('what_went_right', []))}. "
+            f"Gaps: {', '.join(p['point'] for p in summary_payload.get('what_went_wrong', []))}. "
             f"Score: {summary_payload['overall_score']}/100."
         )
         memory_client.add(memory_text, user_id=user_id)

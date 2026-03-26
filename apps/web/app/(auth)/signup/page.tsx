@@ -14,13 +14,6 @@ export default function SignUpPage() {
   const [focused, setFocused]   = useState<string | null>(null);
   const router = useRouter();
 
-  // ✅ Redirect already-logged-in users away from signup
-  useEffect(() => {
-    authClient.getSession().then(({ data }) => {
-      if (data?.session) router.push("/dashboard");
-    });
-  }, []);
-
   const handleEmailSignUp = async () => {
     setLoading(true);
     try {

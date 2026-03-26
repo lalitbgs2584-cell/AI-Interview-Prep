@@ -1,5 +1,4 @@
 "use client";
-
 import { authClient } from "@repo/auth/client";
 import { redirect } from "next/navigation";
 import React, { useRef, useState } from "react";
@@ -87,7 +86,7 @@ export default function OverviewPage({ userName, streak, onNavigate }: {
       <div className="dash-topbar">
         <div>
           <div className="dash-greeting">
-            Good {now.getHours() < 12 ? "morning" : now.getHours() < 17 ? "afternoon" : "evening"}, <em>{userName}</em> 👋
+            Good {now.getHours() < 12 ? "morning" : now.getHours() < 17 ? "afternoon" : "evening"}, <em>{userName}</em> 
           </div>
           <div className="dash-date">{dateStr} · {streak}-day streak 🔥</div>
         </div>
@@ -165,15 +164,6 @@ export default function OverviewPage({ userName, streak, onNavigate }: {
                   );
                 })}
               </div>
-            </div>
-          </div>
-          <div className="panel mt-section">
-            <div className="panel-header">
-              <div className="panel-title">Recent Sessions</div>
-              <button className="panel-link" onClick={() => setActiveTab("sessions")}>View all →</button>
-            </div>
-            <div className="session-list">
-              {recentSessions.slice(0, 3).map((s) => <SessionRow key={s.id} s={s} />)}
             </div>
           </div>
         </div>

@@ -2,7 +2,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 import "../style.css";
-import { useParams, useRouter } from "next/navigation";
+import { redirect, useParams, useRouter } from "next/navigation";
 import { useSpeechToText } from "@/hooks/useSpeechHook";
 import { getSocket } from "@/ws-client-config/socket";
 import { useInterviewStore } from "@/store/useInterviewStore";
@@ -413,7 +413,6 @@ export default function InterviewPage() {
   const endSessionRef = useRef<(fromBackend?: boolean) => void>(() => { });
 
   /* ---------------------- END SESSION ---------------------- */
-
   const endSession = useCallback(
     async (fromBackend = false) => {
       if (endLockRef.current) return;
@@ -463,6 +462,17 @@ export default function InterviewPage() {
         } catch (e) {
           console.error("[socket end]", e);
         }
+      }
+
+      // ── Update activityMap + streak ──────────────────────
+      try {
+        await fetch("/api/activity/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ interviewId }),
+        });
+      } catch (e) {
+        console.warn("[activity] update failed:", e);
       }
 
       reset();

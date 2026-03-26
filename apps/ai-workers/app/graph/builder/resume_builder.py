@@ -11,7 +11,8 @@ from app.graph.nodes.resume_processing_node import (
     store_qdrant_node,
     store_neo4j_node,
     store_neon_node,
-    merge_node
+    merge_node,
+    ats_score_checker
 )
 
 
@@ -31,6 +32,7 @@ def build_resume_graph():
     builder.add_node("store_qdrant", store_qdrant_node)
     builder.add_node("store_neo4j", store_neo4j_node)
     builder.add_node("store_neon", store_neon_node)
+    builder.add_node("ats_score_node", ats_score_checker)
 
     builder.set_entry_point("download")
 
@@ -38,7 +40,8 @@ def build_resume_graph():
     builder.add_edge("convert", "extract")
     builder.add_edge("extract", "clean")
     builder.add_edge("clean", "structured")
-    builder.add_edge("structured", "store_neo4j")
+    builder.add_edge("structured","ats_score_node")
+    builder.add_edge("ats_score_node", "store_neo4j")
     builder.add_edge("store_neo4j", "chunk")
     builder.add_edge("chunk", "embed")
     builder.add_edge("embed", "store_qdrant")

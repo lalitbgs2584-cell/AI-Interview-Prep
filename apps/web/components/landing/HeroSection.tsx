@@ -1,8 +1,20 @@
+"use client";
 
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { BtnPrimary } from "../BtnPrimary";
 import { MockVideoUI } from "./MockVideoUI";
 
 export function HeroSection() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+
+  const handleClick = async () => {
+    setLoading(true);
+    await new Promise((r) => setTimeout(r, 800));
+    router.push("/dashboard");
+  };
+
   return (
     <section style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: "8rem 2rem 5rem", position: "relative", overflow: "hidden" }}>
       {/* glows */}
@@ -29,7 +41,9 @@ export function HeroSection() {
       </p>
 
       <div className="hero-anim-3" style={{ display: "flex", gap: "1rem", flexWrap: "wrap", justifyContent: "center" }}>
-        <BtnPrimary>Start Free Interview →</BtnPrimary>
+        <BtnPrimary onClick={handleClick} loading={loading}>
+          {loading ? "Starting Interview" : "Start Free Interview →"}
+        </BtnPrimary>
         <a href="#how" className="btn-ghost-hover" style={{ background: "transparent", color: "var(--text)", padding: "0.85rem 2.2rem", borderRadius: 8, fontSize: "1rem", fontWeight: 600, fontFamily: "var(--ff-body)", border: "1px solid var(--border)", cursor: "pointer", textDecoration: "none", display: "inline-block", transition: "all 0.2s" }}>
           See how it works
         </a>

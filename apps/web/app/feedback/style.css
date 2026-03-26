@@ -119,8 +119,8 @@ body {
 ══════════════════════════════════════════ */
 .fb-root {
   min-height: 100vh;
-  height: 100vh;
-  overflow-y: auto;
+  /* REMOVE height: 100vh */
+  /* REMOVE overflow-y: auto */
   display: flex;
   flex-direction: column;
 }

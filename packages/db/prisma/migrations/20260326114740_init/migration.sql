@@ -8,7 +8,7 @@ CREATE TYPE "InterviewStatus" AS ENUM ('CREATED', 'IN_PROGRESS', 'COMPLETED', 'C
 CREATE TYPE "InterviewType" AS ENUM ('TECHNICAL', 'HR', 'SYSTEM_DESIGN', 'BEHAVIORAL');
 
 -- CreateEnum
-CREATE TYPE "FileStatus" AS ENUM ('STARTING', 'UPLOADED', 'PROCESSING', 'PROCESSED', 'FAILED');
+CREATE TYPE "FileStatus" AS ENUM ('STARTING', 'UPLOADED', 'PROCESSED', 'FAILED');
 
 -- CreateEnum
 CREATE TYPE "Difficulty" AS ENUM ('EASY', 'MEDIUM', 'HARD');
@@ -78,6 +78,7 @@ CREATE TABLE "verification" (
 CREATE TABLE "skill" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
+    "category" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -108,6 +109,7 @@ CREATE TABLE "interview" (
     "title" TEXT NOT NULL,
     "description" TEXT,
     "userId" TEXT NOT NULL,
+    "videoUrl" TEXT,
     "status" "InterviewStatus" NOT NULL DEFAULT 'CREATED',
     "type" "InterviewType" NOT NULL DEFAULT 'TECHNICAL',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -133,11 +135,6 @@ CREATE TABLE "interview_question" (
 CREATE TABLE "response" (
     "id" TEXT NOT NULL,
     "interviewQuestionId" TEXT NOT NULL,
-    "userText" TEXT,
-    "userAudioUrl" TEXT,
-    "userTranscript" TEXT,
-    "aiIdealAnswer" TEXT,
-    "durationSeconds" INTEGER,
     "submittedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -153,6 +150,7 @@ CREATE TABLE "evaluation" (
     "clarity" INTEGER,
     "technical" INTEGER,
     "confidence" INTEGER,
+    "confidenceScore" DOUBLE PRECISION,
     "feedback" TEXT,
     "strengths" TEXT,
     "improvements" TEXT,
@@ -175,6 +173,85 @@ CREATE TABLE "file" (
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "file_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "resume" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "fileId" TEXT NOT NULL,
+    "neo4jNodeId" TEXT,
+    "qdrantPointIds" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "storedInNeo4j" BOOLEAN NOT NULL DEFAULT false,
+    "storedInQdrant" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "resume_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "insights" (
+    "id" TEXT NOT NULL,
+    "resumeId" TEXT NOT NULL,
+    "experienceLevel" INTEGER NOT NULL DEFAULT 0,
+    "keySkills" TEXT[],
+    "ATSSCORE" INTEGER NOT NULL DEFAULT 0,
+    "strongDomains" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "weakAreas" TEXT[] DEFAULT ARRAY[]::TEXT[],
+
+    CONSTRAINT "insights_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "extracurricular" (
+    "id" TEXT NOT NULL,
+    "resumeId" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "organization" TEXT,
+    "duration" TEXT,
+    "description" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "extracurricular_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "project" (
+    "id" TEXT NOT NULL,
+    "resumeId" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "techStack" TEXT[],
+    "description" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "project_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "education" (
+    "id" TEXT NOT NULL,
+    "resumeId" TEXT NOT NULL,
+    "institution" TEXT NOT NULL,
+    "degree" TEXT NOT NULL,
+    "duration" TEXT,
+    "grade" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "education_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "work_experience" (
+    "id" TEXT NOT NULL,
+    "resumeId" TEXT NOT NULL,
+    "company" TEXT,
+    "role" TEXT,
+    "duration" TEXT,
+    "description" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "work_experience_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -237,6 +314,33 @@ CREATE UNIQUE INDEX "evaluation_responseId_key" ON "evaluation"("responseId");
 -- CreateIndex
 CREATE INDEX "file_userId_idx" ON "file"("userId");
 
+-- CreateIndex
+CREATE UNIQUE INDEX "resume_userId_key" ON "resume"("userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "resume_fileId_key" ON "resume"("fileId");
+
+-- CreateIndex
+CREATE INDEX "resume_userId_idx" ON "resume"("userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "insights_resumeId_key" ON "insights"("resumeId");
+
+-- CreateIndex
+CREATE INDEX "insights_resumeId_idx" ON "insights"("resumeId");
+
+-- CreateIndex
+CREATE INDEX "extracurricular_resumeId_idx" ON "extracurricular"("resumeId");
+
+-- CreateIndex
+CREATE INDEX "project_resumeId_idx" ON "project"("resumeId");
+
+-- CreateIndex
+CREATE INDEX "education_resumeId_idx" ON "education"("resumeId");
+
+-- CreateIndex
+CREATE INDEX "work_experience_resumeId_idx" ON "work_experience"("resumeId");
+
 -- AddForeignKey
 ALTER TABLE "session" ADD CONSTRAINT "session_userId_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
@@ -266,3 +370,24 @@ ALTER TABLE "evaluation" ADD CONSTRAINT "evaluation_responseId_fkey" FOREIGN KEY
 
 -- AddForeignKey
 ALTER TABLE "file" ADD CONSTRAINT "file_userId_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "resume" ADD CONSTRAINT "resume_userId_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "resume" ADD CONSTRAINT "resume_fileId_fkey" FOREIGN KEY ("fileId") REFERENCES "file"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "insights" ADD CONSTRAINT "insights_resumeId_fkey" FOREIGN KEY ("resumeId") REFERENCES "resume"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "extracurricular" ADD CONSTRAINT "extracurricular_resumeId_fkey" FOREIGN KEY ("resumeId") REFERENCES "resume"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "project" ADD CONSTRAINT "project_resumeId_fkey" FOREIGN KEY ("resumeId") REFERENCES "resume"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "education" ADD CONSTRAINT "education_resumeId_fkey" FOREIGN KEY ("resumeId") REFERENCES "resume"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "work_experience" ADD CONSTRAINT "work_experience_resumeId_fkey" FOREIGN KEY ("resumeId") REFERENCES "resume"("id") ON DELETE CASCADE ON UPDATE CASCADE;

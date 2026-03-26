@@ -43,7 +43,11 @@ class ResumeProcessState(TypedDict):
     work_experience: Optional[List[Dict]]
     education: Optional[List[Dict]]
     projects: Optional[List[Dict]]
+    strong_domains: Optional[List]
     extracurricular: Optional[List[Dict]]
+    key_skills: Optional[List]
+    experience_level:  int
+    ats_score:  int
 
     # ── Stage 5b: Chunking + Embedding ──
     # Written by chunk_node and embedding_node (Branch 2)

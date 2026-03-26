@@ -19,11 +19,17 @@ model User {
   accounts      Account[]
 
   // Resume
-  isResumeUploaded Boolean @default(false)
+  isResumeUploaded Boolean   @default(false)
   // Soft delete
-  isDeleted        Boolean @default(false)
-
-  role UserRole @default(USER)
+  isDeleted        Boolean   @default(false)
+  isBlocked        Boolean   @default(false)
+  isBlockedReason  String    @default("")
+  isBlockedAt      DateTime?  
+  streak           Int       @default(0) // current login streak (days)
+  bestStreak       Int       @default(0) // all-time best streak
+  lastLoginAt      DateTime? // track for streak logic
+  activityMap      Json      @default("{}") // ISO-date → session count map
+  role             UserRole  @default(USER)
 
   interviews Interview[]
   skills     UserSkill[]
@@ -119,11 +125,11 @@ enum Difficulty {
 // SKILLS
 
 model Skill {
-  id       String      @id @default(uuid())
-  name     String      @unique
+  id       String  @id @default(uuid())
+  name     String  @unique
   category String?
 
-  users    UserSkill[]
+  users UserSkill[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -173,8 +179,8 @@ model Interview {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   videoUrl String?
-  status InterviewStatus @default(CREATED)
-  type   InterviewType   @default(TECHNICAL)
+  status   InterviewStatus @default(CREATED)
+  type     InterviewType   @default(TECHNICAL)
 
   questions InterviewQuestion[]
 
@@ -216,7 +222,7 @@ model Response {
 
   interviewQuestionId String            @unique
   interviewQuestion   InterviewQuestion @relation(fields: [interviewQuestionId], references: [id], onDelete: Cascade)
-  submittedAt     DateTime?
+  submittedAt         DateTime?
 
   evaluation Evaluation?
 
@@ -271,10 +277,10 @@ model File {
 
 model Resume {
   id             String   @id @default(uuid())
-  userId         String
+  userId         String   @unique
   fileId         String   @unique
   neo4jNodeId    String?
-  qdrantPointIds String[] @default([]) // postgres array
+  qdrantPointIds String[] @default([])
   storedInNeo4j  Boolean  @default(false)
   storedInQdrant Boolean  @default(false)
 
@@ -285,13 +291,26 @@ model Resume {
   education       Education[]
   projects        Project[]
   extracurricular Extracurricular[]
+  insights        Insights?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  
-@@unique([userId])
   @@index([userId])
   @@map("resume")
+}
+
+model Insights {
+  id              String   @id @default(uuid())
+  resumeId        String   @unique
+  resume          Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  experienceLevel Int      @default(0)
+  keySkills       String[]
+  ATSSCORE        Int      @default(0)
+  strongDomains   String[] @default([])
+  weakAreas       String[] @default([])
+
+  @@index([resumeId])
+  @@map("insights")
 }
 
 model Extracurricular {

@@ -21,64 +21,64 @@ import { prisma } from "@repo/db/prisma-db";
 // ─────────────────────────────────────────────────────────────────────────────
 interface UnifiedInterviewResult {
   // ── Metadata ──────────────────────────────────────────────────────────────
-  role:             string;
-  interview_type:   string;
-  candidate_name:   string;
-  date_iso:         string;
+  role: string;
+  interview_type: string;
+  candidate_name: string;
+  date_iso: string;
   duration_seconds: number;
-  recommendation:   string;
+  recommendation: string;
 
   // ── Narrative ─────────────────────────────────────────────────────────────
-  summary:     string;
-  strengths:   string[];
-  weaknesses:  string[];   // FeedbackPage reads this key
-  improvements:string[];   // HistoryPage drawer reads this key  (= weaknesses)
-  tips:        string[];
+  summary: string;
+  strengths: string[];
+  weaknesses: string[];   // FeedbackPage reads this key
+  improvements: string[];   // HistoryPage drawer reads this key  (= weaknesses)
+  tips: string[];
 
   // ── Scores — snake_case (FeedbackPage) ────────────────────────────────────
   overall_score: number;
-  skill_scores:  Record<string, number>;
+  skill_scores: Record<string, number>;
 
   // ── Scores — camelCase (HistoryPage drawer) ───────────────────────────────
-  overallScore:        number;   // = overall_score
-  technicalScore:      number;
-  communicationScore:  number;
+  overallScore: number;   // = overall_score
+  technicalScore: number;
+  communicationScore: number;
   problemSolvingScore: number;
-  confidenceScore:     number;
+  confidenceScore: number;
 
   // ── Questions — FeedbackPage format ──────────────────────────────────────
   question_scores: {
-    index:      number;
-    score:      number;       // 0-100
+    index: number;
+    score: number;       // 0-100
     difficulty: string;
-    question:   string;
-    feedback:   string;
-    timestamp:  number;
+    question: string;
+    feedback: string;
+    timestamp: number;
   }[];
 
   // ── Questions — HistoryPage drawer format ─────────────────────────────────
   questions: {
-    order:      number | null;
-    content:    string;
+    order: number | null;
+    content: string;
     difficulty: string | null;
-    score:      number | null;
+    score: number | null;
     evaluation: {
-      overallScore:  number | null;
-      clarity:       number | null;
-      technical:     number | null;
-      confidence:    number | null;
-      feedback:      string | null;
-      strengths:     string | null;
-      improvements:  string | null;
+      overallScore: number | null;
+      clarity: number | null;
+      technical: number | null;
+      confidence: number | null;
+      feedback: string | null;
+      strengths: string | null;
+      improvements: string | null;
     } | null;
   }[];
 
   // ── Session history (FeedbackPage score-history chart) ────────────────────
   history: {
     interview_id: string;
-    score:        number;
-    role:         string;
-    date_iso:     string;
+    score: number;
+    role: string;
+    date_iso: string;
   }[];
 }
 
@@ -93,60 +93,60 @@ function normalizeRedisSummary(
   history: UnifiedInterviewResult["history"],
 ): UnifiedInterviewResult {
   const skillScores: Record<string, number> = raw.skill_scores ?? {};
-  const questionScoresRaw: any[]            = raw.question_scores ?? [];
+  const questionScoresRaw: any[] = raw.question_scores ?? [];
 
   const overall = raw.overall_score ?? 0;
 
   // Derive the four camelCase score fields from skill_scores where possible
-  const technicalScore      = skillScores["Technical Depth"]  ?? skillScores["Technical"]   ?? 0;
-  const communicationScore  = skillScores["Communication"]    ?? skillScores["Clarity"]      ?? 0;
-  const problemSolvingScore = skillScores["Problem Solving"]  ?? overall;
-  const confidenceScore     = skillScores["Confidence"]       ?? 0;
+  const technicalScore = skillScores["Technical Depth"] ?? skillScores["Technical"] ?? 0;
+  const communicationScore = skillScores["Communication"] ?? skillScores["Clarity"] ?? 0;
+  const problemSolvingScore = skillScores["Problem Solving"] ?? overall;
+  const confidenceScore = skillScores["Confidence"] ?? 0;
 
-  const strengths   = Array.isArray(raw.strengths)  ? raw.strengths  : [];
-  const weaknesses  = Array.isArray(raw.weaknesses) ? raw.weaknesses : [];
-  const tips        = Array.isArray(raw.tips)       ? raw.tips       : [];
+  const strengths = Array.isArray(raw.strengths) ? raw.strengths : [];
+  const weaknesses = Array.isArray(raw.weaknesses) ? raw.weaknesses : [];
+  const tips = Array.isArray(raw.tips) ? raw.tips : [];
 
   // Build the FeedbackPage question_scores array
   const question_scores: UnifiedInterviewResult["question_scores"] = questionScoresRaw.map(
     (q: any) => ({
-      index:      q.index      ?? 0,
-      score:      q.score      ?? 0,
+      index: q.index ?? 0,
+      score: q.score ?? 0,
       difficulty: (q.difficulty ?? "medium").toLowerCase(),
-      question:   q.question   ?? "",
-      feedback:   q.feedback   ?? "",
-      timestamp:  q.timestamp  ?? 0,
+      question: q.question ?? "",
+      feedback: q.feedback ?? "",
+      timestamp: q.timestamp ?? 0,
     }),
   );
 
   // Build the HistoryPage `questions` array from the same source
   const questions: UnifiedInterviewResult["questions"] = questionScoresRaw.map((q: any) => ({
-    order:      q.index   ?? null,
-    content:    q.question ?? "",
+    order: q.index ?? null,
+    content: q.question ?? "",
     difficulty: q.difficulty ? q.difficulty.toUpperCase() : null,
-    score:      q.score   ?? null,
+    score: q.score ?? null,
     evaluation: {
-      overallScore:  q.score    ?? null,
-      clarity:       null,
-      technical:     null,
-      confidence:    null,
-      feedback:      q.feedback ?? null,
-      strengths:     null,
-      improvements:  null,
+      overallScore: q.score ?? null,
+      clarity: null,
+      technical: null,
+      confidence: null,
+      feedback: q.feedback ?? null,
+      strengths: null,
+      improvements: null,
     },
   }));
 
   return {
     // Metadata
-    role:             raw.role            ?? "Interview",
-    interview_type:   raw.interview_type  ?? "technical",
-    candidate_name:   raw.candidate_name  ?? "Candidate",
-    date_iso:         raw.date_iso        ?? new Date().toISOString(),
+    role: raw.role ?? "Interview",
+    interview_type: raw.interview_type ?? "technical",
+    candidate_name: raw.candidate_name ?? "Candidate",
+    date_iso: raw.date_iso ?? new Date().toISOString(),
     duration_seconds: raw.duration_seconds ?? 0,
-    recommendation:   raw.recommendation  ?? "Needs More Evaluation",
+    recommendation: raw.recommendation ?? "Needs More Evaluation",
 
     // Narrative
-    summary:      raw.summary ?? "No summary available.",
+    summary: raw.summary ?? "No summary available.",
     strengths,
     weaknesses,      // FeedbackPage key
     improvements: weaknesses, // HistoryPage key (same data)
@@ -154,10 +154,10 @@ function normalizeRedisSummary(
 
     // Scores — snake_case
     overall_score: overall,
-    skill_scores:  skillScores,
+    skill_scores: skillScores,
 
     // Scores — camelCase
-    overallScore:        overall,
+    overallScore: overall,
     technicalScore,
     communicationScore,
     problemSolvingScore,
@@ -224,7 +224,7 @@ export const resumeController = {
       const userId = session.user.id;
 
       const interviews = await prisma.interview.findMany({
-        where:   { userId },
+        where: { userId },
         orderBy: { createdAt: "desc" },
         select: {
           id: true, title: true, type: true, status: true,
@@ -234,16 +234,16 @@ export const resumeController = {
       });
 
       const TYPE_LABEL: Record<string, string> = {
-        TECHNICAL:    "Coding",
-        HR:           "Behavioral",
-        SYSTEM_DESIGN:"System Design",
-        BEHAVIORAL:   "Behavioral",
+        TECHNICAL: "Coding",
+        HR: "Behavioral",
+        SYSTEM_DESIGN: "System Design",
+        BEHAVIORAL: "Behavioral",
       };
       const STATUS_MAP: Record<string, string> = {
-        CREATED:     "in_progress",
+        CREATED: "in_progress",
         IN_PROGRESS: "in_progress",
-        COMPLETED:   "completed",
-        CANCELLED:   "terminated",
+        COMPLETED: "completed",
+        CANCELLED: "terminated",
       };
 
       const result = interviews.map((iv) => {
@@ -255,12 +255,12 @@ export const resumeController = {
           ? Math.floor((iv.completedAt.getTime() - iv.createdAt.getTime()) / 1000)
           : null;
         return {
-          id:       iv.id,
-          title:    iv.title,
-          type:     TYPE_LABEL[iv.type] ?? iv.type,
-          status:   STATUS_MAP[iv.status] ?? "in_progress",
+          id: iv.id,
+          title: iv.title,
+          type: TYPE_LABEL[iv.type] ?? iv.type,
+          status: STATUS_MAP[iv.status] ?? "in_progress",
           score,
-          date:     iv.createdAt.toISOString(),
+          date: iv.createdAt.toISOString(),
           duration,
         };
       });
@@ -304,7 +304,7 @@ export const resumeController = {
 
       // ── 2️⃣ DATABASE FALLBACK ─────────────────────────────────────────────
       const interview = await prisma.interview.findFirst({
-        where:   { id: interviewId, userId },
+        where: { id: interviewId, userId },
         include: {
           questions: {
             orderBy: { order: "asc" },
@@ -319,7 +319,7 @@ export const resumeController = {
       if (!interview) return res.status(404).json({ error: "Interview not found" });
 
       const user = await prisma.user.findUnique({
-        where:  { id: userId },
+        where: { id: userId },
         select: { name: true },
       });
 
@@ -331,11 +331,11 @@ export const resumeController = {
         .filter((e): e is Eval => e != null);
 
       // ── Aggregate scores ────────────────────────────────────────────────
-      const overallScore        = meanOf(evals.map((e) => e.overallScore));
-      const technicalScore      = meanOf(evals.map((e) => e.technical));
-      const communicationScore  = meanOf(evals.map((e) => e.clarity));
+      const overallScore = meanOf(evals.map((e) => e.overallScore));
+      const technicalScore = meanOf(evals.map((e) => e.technical));
+      const communicationScore = meanOf(evals.map((e) => e.clarity));
       const problemSolvingScore = overallScore; // no dedicated DB column
-      const confidenceScore     = meanOf(
+      const confidenceScore = meanOf(
         evals.map((e) => {
           const raw = (e as any).confidenceScore as number | null;
           return raw !== null ? Math.round(raw * 100) : null;
@@ -344,21 +344,21 @@ export const resumeController = {
 
       const skill_scores: Record<string, number> = {
         "Technical Depth": technicalScore,
-        "Communication":   communicationScore,
+        "Communication": communicationScore,
         "Problem Solving": problemSolvingScore,
-        "Confidence":      confidenceScore,
+        "Confidence": confidenceScore,
       };
 
       // ── Narrative arrays ────────────────────────────────────────────────
-      const strengths   = [...new Set(evals.flatMap((e) => splitPiped(e.strengths)))].slice(0, 5);
-      const weaknesses  = [...new Set(evals.flatMap((e) => splitPiped(e.improvements)))].slice(0, 5);
-      const summary     = evals.find((e) => e.feedback)?.feedback ?? "No summary available.";
+      const strengths = [...new Set(evals.flatMap((e) => splitPiped(e.strengths)))].slice(0, 5);
+      const weaknesses = [...new Set(evals.flatMap((e) => splitPiped(e.improvements)))].slice(0, 5);
+      const summary = evals.find((e) => e.feedback)?.feedback ?? "No summary available.";
 
       // ── Recommendation ──────────────────────────────────────────────────
       const recommendation =
         overallScore >= 75 ? "Strong Hire" :
-        overallScore >= 60 ? "Hire"        :
-        overallScore >= 45 ? "Leaning No Hire" : "No Hire";
+          overallScore >= 60 ? "Hire" :
+            overallScore >= 45 ? "Leaning No Hire" : "No Hire";
 
       // ── Duration ────────────────────────────────────────────────────────
       const duration_seconds = interview.completedAt
@@ -367,21 +367,21 @@ export const resumeController = {
 
       // ── TYPE label (DB stores enum, frontend wants human label) ─────────
       const TYPE_LABEL: Record<string, string> = {
-        TECHNICAL:    "Coding",
-        HR:           "Behavioral",
-        SYSTEM_DESIGN:"System Design",
-        BEHAVIORAL:   "Behavioral",
+        TECHNICAL: "Coding",
+        HR: "Behavioral",
+        SYSTEM_DESIGN: "System Design",
+        BEHAVIORAL: "Behavioral",
       };
 
       // ── Build question_scores (FeedbackPage format) ─────────────────────
       const question_scores: UnifiedInterviewResult["question_scores"] = interview.questions.map(
         (iq) => ({
-          index:      iq.order ?? 0,
-          score:      iq.score ?? 0,
+          index: iq.order ?? 0,
+          score: iq.score ?? 0,
           difficulty: (iq.question.difficulty ?? "medium").toLowerCase(),
-          question:   iq.question.content,
-          feedback:   iq.response?.evaluation?.feedback ?? "",
-          timestamp:  Math.floor((iq.response?.submittedAt?.getTime() ?? Date.now()) / 1000),
+          question: iq.question.content,
+          feedback: iq.response?.evaluation?.feedback ?? "",
+          timestamp: Math.floor((iq.response?.submittedAt?.getTime() ?? Date.now()) / 1000),
         }),
       );
 
@@ -389,32 +389,32 @@ export const resumeController = {
       const questions: UnifiedInterviewResult["questions"] = interview.questions.map((iq) => {
         const ev = iq.response?.evaluation ?? null;
         return {
-          order:      iq.order,
-          content:    iq.question.content,
+          order: iq.order,
+          content: iq.question.content,
           difficulty: iq.question.difficulty ?? null,
-          score:      iq.score ?? null,
+          score: iq.score ?? null,
           evaluation: ev
             ? {
-                overallScore: ev.overallScore  ?? null,
-                clarity:      ev.clarity       ?? null,
-                technical:    ev.technical     ?? null,
-                confidence:   (ev as any).confidenceScore !== undefined
-                  ? Math.round((ev as any).confidenceScore * 100)
-                  : null,
-                feedback:     ev.feedback      ?? null,
-                strengths:    ev.strengths     ?? null,
-                improvements: ev.improvements  ?? null,
-              }
+              overallScore: ev.overallScore ?? null,
+              clarity: ev.clarity ?? null,
+              technical: ev.technical ?? null,
+              confidence: (ev as any).confidenceScore !== undefined
+                ? Math.round((ev as any).confidenceScore * 100)
+                : null,
+              feedback: ev.feedback ?? null,
+              strengths: ev.strengths ?? null,
+              improvements: ev.improvements ?? null,
+            }
             : null,
         };
       });
 
       const payload: UnifiedInterviewResult = {
         // Metadata
-        role:             interview.title,
-        interview_type:   TYPE_LABEL[interview.type] ?? interview.type,
-        candidate_name:   user?.name ?? "Candidate",
-        date_iso:         interview.createdAt.toISOString(),
+        role: interview.title,
+        interview_type: TYPE_LABEL[interview.type] ?? interview.type,
+        candidate_name: user?.name ?? "Candidate",
+        date_iso: interview.createdAt.toISOString(),
         duration_seconds,
         recommendation,
 
@@ -451,24 +451,59 @@ export const resumeController = {
     }
   },
 
-  // ── GET /api/get-resume ───────────────────────────────────────────────────
   getResumeStatus: async (req: AuthenticatedRequest, res: Response) => {
     try {
       const session = req.session;
-      if (!session?.user?.id) return res.status(401).json({ message: "Unauthorized" });
-
+      if (!session?.user?.id) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      console.log("Get resume route started.")
+      // ✅ Fix 1: Await user query properly
       const user = await prisma.user.findUnique({
-        where:  { id: session.user.id },
-        select: { isResumeUploaded: true },
+        where: { id: session.user.id }
       });
-      if (!user) return res.status(404).json({ message: "User not found" });
 
-      return res.status(200).json({ resumeUploaded: user.isResumeUploaded });
+      // ✅ Fix 2: Direct resume query (user.isResumeUploaded redundant)
+      const resume = await prisma.resume.findUnique({
+        where: { userId: session.user.id },
+        include: {
+          file: true,
+          insights: true
+        },
+      });
+
+      console.log("DEBUG - Resume found:", !!resume);
+      console.log("DEBUG - File:", resume?.file);
+
+      // No resume = upload zone
+      if (!resume || !resume.file) {
+        return res.status(200).json({
+          resumeUploaded: false,
+          debug: "No resume or file in DB"
+        });
+      }
+      console.log("Resume Insights are:", resume.insights)
+
+      // ✅ Success response
+      return res.status(200).json({
+        resumeUploaded: true,
+        resumeUrl: resume.file.url || resume.file.S3FileName,  // Fallback
+        resumeFileName: resume.file.OriginalFileName,
+        fileStatus: resume.file.status,
+        insights: resume.insights ? {
+          experienceLevel: resume.insights.experienceLevel,
+          keySkills: resume.insights.keySkills,
+          ATSSCORE: resume.insights.ATSSCORE,
+          strongDomains: resume.insights.strongDomains,
+          weakAreas: resume.insights.weakAreas,
+        } : null,
+      });
     } catch (error) {
-      console.error(error);
+      console.error("[getResumeStatus]", error);
       return res.status(500).json({ message: "Internal server error" });
     }
   },
+
 
   // ── POST /api/interview/:id/complete ─────────────────────────────────────
   storeNeon: async (req: AuthenticatedRequest, res: Response) => {
@@ -476,7 +511,7 @@ export const resumeController = {
     if (!interviewId) { res.status(400).json({ error: "Interview ID is required" }); return; }
 
     try {
-      
+
       const rawSummary = await redisClient.get(`interview:${interviewId}:summary`);
       if (!rawSummary) {
         res.status(404).json({ error: "Summary not found in Redis. Interview may not be complete yet." });
@@ -508,13 +543,13 @@ export const resumeController = {
         res.json({ success: true, message: "Already persisted", interviewId });
         return;
       }
-      
+
       await prisma.$transaction(async (tx) => {
         for (const step of history) {
           const questionId = `${interviewId}-q${step.index}`;
 
           const question = await tx.question.upsert({
-            where:  { id: questionId },
+            where: { id: questionId },
             update: {},
             create: {
               id: questionId, content: step.question,
@@ -523,13 +558,13 @@ export const resumeController = {
           });
 
           const interviewQuestion = await tx.interviewQuestion.upsert({
-            where:  { interviewId_questionId: { interviewId, questionId: question.id } },
+            where: { interviewId_questionId: { interviewId, questionId: question.id } },
             update: { score: Math.round(step.score * 10), order: step.index },
             create: { interviewId, questionId: question.id, score: Math.round(step.score * 10), order: step.index },
           });
 
           const response = await tx.response.upsert({
-            where:  { interviewQuestionId: interviewQuestion.id },
+            where: { interviewQuestionId: interviewQuestion.id },
             update: { submittedAt: step.timestamp ? new Date(step.timestamp * 1000) : new Date() },
             create: { interviewQuestionId: interviewQuestion.id, submittedAt: step.timestamp ? new Date(step.timestamp * 1000) : new Date() },
           });
@@ -537,47 +572,47 @@ export const resumeController = {
           await tx.evaluation.upsert({
             where: { responseId: response.id },
             update: {
-              overallScore:    Math.round(step.score * 10),
+              overallScore: Math.round(step.score * 10),
               confidenceScore: step.confidence,
-              feedback:        step.feedback ?? "",
-              clarity:         summary.skill_scores?.["Clarity"]         ?? null,
-              technical:       summary.skill_scores?.["Technical Depth"] ?? null,
-              confidence:      summary.skill_scores?.["Confidence"]      ?? null,
-              strengths:       summary.strengths?.join(" | ")  ?? null,
-              improvements:    summary.weaknesses?.join(" | ") ?? null,
+              feedback: step.feedback ?? "",
+              clarity: summary.skill_scores?.["Clarity"] ?? null,
+              technical: summary.skill_scores?.["Technical Depth"] ?? null,
+              confidence: summary.skill_scores?.["Confidence"] ?? null,
+              strengths: summary.strengths?.join(" | ") ?? null,
+              improvements: summary.weaknesses?.join(" | ") ?? null,
             },
             create: {
-              responseId:      response.id,
-              overallScore:    Math.round(step.score * 10),
+              responseId: response.id,
+              overallScore: Math.round(step.score * 10),
               confidenceScore: step.confidence,
-              feedback:        step.feedback ?? "",
-              clarity:         summary.skill_scores?.["Clarity"]         ?? null,
-              technical:       summary.skill_scores?.["Technical Depth"] ?? null,
-              confidence:      summary.skill_scores?.["Confidence"]      ?? null,
-              strengths:       summary.strengths?.join(" | ")  ?? null,
-              improvements:    summary.weaknesses?.join(" | ") ?? null,
+              feedback: step.feedback ?? "",
+              clarity: summary.skill_scores?.["Clarity"] ?? null,
+              technical: summary.skill_scores?.["Technical Depth"] ?? null,
+              confidence: summary.skill_scores?.["Confidence"] ?? null,
+              strengths: summary.strengths?.join(" | ") ?? null,
+              improvements: summary.weaknesses?.join(" | ") ?? null,
             },
           });
         }
 
         await tx.interview.update({
           where: { id: interviewId },
-          data:  { status: "COMPLETED", completedAt: new Date() },
+          data: { status: "COMPLETED", completedAt: new Date() },
         });
       });
 
       // Save score to Redis history list
-      const historyKey     = `user:${interview.userId}:interview_scores`;
+      const historyKey = `user:${interview.userId}:interview_scores`;
       const existingScores = await redisClient.lrange(historyKey, 0, -1);
-      const alreadySaved   = existingScores.some((e: string) => {
+      const alreadySaved = existingScores.some((e: string) => {
         try { return JSON.parse(e).interview_id === interviewId; } catch { return false; }
       });
       if (!alreadySaved) {
         await redisClient.rpush(historyKey, JSON.stringify({
           interview_id: interviewId,
-          score:        summary.overall_score,
-          role:         summary.role,
-          date_iso:     summary.date_iso,
+          score: summary.overall_score,
+          role: summary.role,
+          date_iso: summary.date_iso,
         }));
       }
 
@@ -605,10 +640,10 @@ export const resumeController = {
       const userId = session.user.id;
       const {
         interviewTitle, interviewType,
-        description   = "",
-        difficulty    = "medium",
+        description = "",
+        difficulty = "medium",
         questionCount = 10,
-        topics        = [],
+        topics = [],
       } = req.body;
 
       if (!interviewTitle?.trim() || !interviewType)
@@ -623,14 +658,14 @@ export const resumeController = {
       const job = {
         type: "interview_creation",
         payload: {
-          interview_id:   interview.id,
-          user_id:        userId,
-          role:           interviewTitle.trim(),
+          interview_id: interview.id,
+          user_id: userId,
+          role: interviewTitle.trim(),
           interview_type: interviewType.toLowerCase(),
           description,
-          difficulty:     difficulty.toLowerCase(),
-          max_questions:  Math.max(3, Math.min(15, Number(questionCount))),
-          topics:         Array.isArray(topics) ? topics : [],
+          difficulty: difficulty.toLowerCase(),
+          max_questions: Math.max(3, Math.min(15, Number(questionCount))),
+          topics: Array.isArray(topics) ? topics : [],
         },
         meta: { enqueuedAt: new Date().toISOString() },
       };
@@ -643,14 +678,179 @@ export const resumeController = {
       return res.status(500).json({ message: "Failed to create interview" });
     }
   },
+  // ── GET /api/skills-insights ──────────────────────────────────────────────
+  getSkillsInsights: async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const session = req.session;
+      if (!session?.user?.id) return res.status(401).json({ message: "Unauthorized" });
+      const userId = session.user.id;
+
+      // ── 1. User's skills from resume ───────────────────────────────────────
+      const userSkills = await prisma.userSkill.findMany({
+        where: { userId },
+        include: { skill: true },
+      });
+
+      // ── 2. All completed interviews with evaluations ───────────────────────
+      const interviews = await prisma.interview.findMany({
+        where: { userId, status: "COMPLETED" },
+        include: {
+          questions: {
+            include: {
+              question: true,
+              response: { include: { evaluation: true } },
+            },
+          },
+        },
+      });
+
+      // ── 3. Resume insights for weakAreas ──────────────────────────────────
+      const resume = await prisma.resume.findUnique({
+        where: { userId },
+        include: { insights: true },
+      });
+
+      // ── 4. Build per-category score map from evaluations ──────────────────
+      // Each InterviewQuestion has a score (0-100). Group by interview type.
+      const categoryScores: Record<string, number[]> = {};
+
+      for (const interview of interviews) {
+        const type = interview.type; // TECHNICAL | HR | SYSTEM_DESIGN | BEHAVIORAL
+        for (const iq of interview.questions) {
+          const score = iq.score ?? iq.response?.evaluation?.overallScore ?? null;
+          if (score !== null) {
+            if (!categoryScores[type]) categoryScores[type] = [];
+            categoryScores[type].push(score);
+          }
+        }
+      }
+
+      // ── 5. Compute avg per category ────────────────────────────────────────
+      const categoryAverages: Record<string, number> = {};
+      for (const [cat, scores] of Object.entries(categoryScores)) {
+        categoryAverages[cat] = Math.round(
+          scores.reduce((a, b) => a + b, 0) / scores.length
+        );
+      }
+
+      // ── 6. Strongest / weakest from interview data ─────────────────────────
+      const sortedCategories = Object.entries(categoryAverages).sort((a, b) => b[1] - a[1]);
+      const strongest = sortedCategories[0] ?? null;
+      const weakest = sortedCategories[sortedCategories.length - 1] ?? null;
+
+      // ── 7. Overall average across all evaluated questions ─────────────────
+      const allScores = Object.values(categoryScores).flat();
+      const overallAvg = allScores.length
+        ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length)
+        : null;
+
+      // ── 8. Skills covered in interviews (by question type mapping) ────────
+      const coveredTypes = new Set(interviews.map((iv) => iv.type));
+
+      // ── 9. Upcoming skills to pursue ──────────────────────────────────────
+      // = resume weakAreas + skill categories not yet interviewed
+      const weakAreas: string[] = resume?.insights?.weakAreas ?? [];
+
+      const TYPE_LABEL: Record<string, string> = {
+        TECHNICAL: "Technical",
+        HR: "HR / Behavioral",
+        SYSTEM_DESIGN: "System Design",
+        BEHAVIORAL: "Behavioral",
+      };
+      const uncoveredTypes = (["TECHNICAL", "HR", "SYSTEM_DESIGN", "BEHAVIORAL"] as const)
+        .filter((t) => !coveredTypes.has(t))
+        .map((t) => TYPE_LABEL[t]);
+
+      const upcomingSkills = [
+        ...weakAreas,
+        ...uncoveredTypes.map((t) => `Practice ${t} interviews`),
+      ].slice(0, 6);
+
+      return res.status(200).json({
+        // Raw skills list (existing, for the chips grid)
+        skills: userSkills.map((us) => ({
+          id: us.skill.id,
+          name: us.skill.name,
+          category: us.skill.category ?? "Other",
+        })),
+
+        // Stat cards
+        strongest: strongest ? { label: TYPE_LABEL[strongest[0]] ?? strongest[0], score: strongest[1] } : null,
+        weakest: weakest ? { label: TYPE_LABEL[weakest[0]] ?? weakest[0], score: weakest[1] } : null,
+        overallAvg: overallAvg,
+
+        // Per-category breakdown for progress bars
+        categoryAverages: Object.fromEntries(
+          Object.entries(categoryAverages).map(([k, v]) => [TYPE_LABEL[k] ?? k, v])
+        ),
+
+        // Upcoming recommendations
+        upcomingSkills,
+
+        // Meta
+        totalInterviews: interviews.length,
+        interviewsCovered: [...coveredTypes].map((t) => TYPE_LABEL[t] ?? t),
+      });
+
+    } catch (error) {
+      console.error("[getSkillsInsights]", error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  },
+
+  generateInterviewPlan: async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const session = req.session;
+      if (!session?.user?.id) return res.status(401).json({ message: "Unauthorized" });
+      const userId = session.user.id;
+      const {
+        interviewType,
+        description = "",
+        difficulty = "medium",
+        numQuestions = 10,
+        targetRole,
+        duration
+      } = req.body;
+
+      if (
+        !interviewType ||
+        !targetRole?.trim() ||
+        !numQuestions ||
+        !duration
+      ) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      // await redisClient.set(`interview:${interview.id}:user_id`, userId, "EX", 60 * 60 * 24);
+
+      const job = {
+        type: "plan_generation",
+        payload: {
+          role: targetRole.trim(),
+          interview_type: interviewType.toLowerCase(),
+          duration,
+          difficulty: difficulty.toLowerCase(),
+          max_questions: Number(numQuestions),
+        },
+        meta: { enqueuedAt: new Date().toISOString() },
+      };
+
+      await redisClient.rpush("jobs", JSON.stringify(job));
+      console.log(`✅ Generate Plan Queued — id=${userId}`);
+      return res.status(201).json({ message: "Plan Generated" });
+    } catch (error) {
+      console.error("[startInterview] Error:", error);
+      return res.status(500).json({ message: "Failed to create interview" });
+    }
+  }
 };
 
 function mapDifficulty(d: string): "EASY" | "MEDIUM" | "HARD" | null {
   switch (d.toLowerCase()) {
     case "intro":
-    case "easy":   return "EASY";
+    case "easy": return "EASY";
     case "medium": return "MEDIUM";
-    case "hard":   return "HARD";
-    default:       return null;
+    case "hard": return "HARD";
+    default: return null;
   }
 }
