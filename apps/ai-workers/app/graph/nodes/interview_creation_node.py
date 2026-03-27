@@ -1,7 +1,35 @@
+"""
+Interview Engine — Production-Grade Redesign
+=============================================
+Key changes vs original:
+
+NODE 2  generate_question   — returns {question, expected_answer} JSON in ONE LLM call.
+                              expected_answer carries: key_concepts, reasoning_steps,
+                              ideal_structure, common_mistakes.
+
+NODE 5  evaluate_answer     — COMPARATIVE evaluation: user_answer vs expected_answer.
+                              Returns full dimensional breakdown + missing concepts.
+                              Difficulty-aware scoring caps applied DETERMINISTICALLY
+                              after LLM output (not left to LLM discretion).
+
+NODE 6  store_step          — persists FULL structured entry incl. expected_answer,
+                              dimensions, missing_concepts, strengths, weaknesses,
+                              verdict.  NO more score+feedback-only storage.
+
+NODE 8  finalize            — HYBRID:
+                                Step 1 (deterministic) — compute weighted score,
+                                  aggregate gaps, rank strengths/weaknesses, detect
+                                  repeated patterns.
+                                Step 2 (LLM) — narrate computed facts into readable
+                                  summary.  LLM cannot invent data it wasn't given.
+"""
+
 import json
 import time
 import re
-from typing import List
+from collections import Counter
+from typing import List, Dict, Any
+
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from qdrant_client import QdrantClient
@@ -14,9 +42,9 @@ from app.graph.state.interview_creation_state import InterviewState
 from app.core.mem0 import memory_client
 
 
-# -----------------------------
-# Clients
-# -----------------------------
+# ─────────────────────────────────────────────
+# CLIENTS
+# ─────────────────────────────────────────────
 
 qdrant = QdrantClient(url=settings.QDRANT_URI)
 
@@ -25,28 +53,53 @@ neo4j_driver = GraphDatabase.driver(
     auth=(settings.NEO4J_USERNAME, settings.NEO4J_PASSWORD),
 )
 
-llm      = ChatOpenAI(model="gpt-4.1", temperature=0.7, api_key=settings.OPENAI_API_KEY)
-llm_eval = ChatOpenAI(model="gpt-4.1", temperature=0.2, api_key=settings.OPENAI_API_KEY)
+# Creative temperature for question generation
+llm = ChatOpenAI(model="gpt-4.1", temperature=0.7, api_key=settings.OPENAI_API_KEY)
+
+# Low temperature for deterministic evaluation — consistency is paramount
+llm_eval = ChatOpenAI(model="gpt-4.1", temperature=0.1, api_key=settings.OPENAI_API_KEY)
+
+# Near-zero temperature for final summary narration (facts only, no invention)
+llm_summary = ChatOpenAI(model="gpt-4.1", temperature=0.2, api_key=settings.OPENAI_API_KEY)
 
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=settings.OPENAI_API_KEY)
 
 QDRANT_COLLECTION     = "resumes"
 DEFAULT_MAX_QUESTIONS = 10
-
 HUMAN_INTERVIEW_TYPES = {"behavioral", "hr"}
 
 
-# -----------------------------
-# Utilities
-# -----------------------------
+# ─────────────────────────────────────────────
+# UTILITIES
+# ─────────────────────────────────────────────
 
-def publish_event(channel: str, payload: dict):
+def publish_event(channel: str, payload: dict) -> None:
     client.publish(channel, json.dumps(payload))
 
 
 def safe_json_parse(text: str) -> dict:
+    """
+    Robust JSON extraction — tries three strategies before raising.
+    1. Strip markdown fences then parse.
+    2. Extract first {...} block via regex.
+    3. Raise so the caller can fall back gracefully.
+    """
+    # Strategy 1: strip fences
     cleaned = re.sub(r"```(?:json)?", "", text).replace("```", "").strip()
-    return json.loads(cleaned)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: extract first balanced JSON object
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError(f"Could not parse JSON from LLM output: {text[:200]}")
 
 
 def get_candidate_name(resume_chunks: List[str]) -> str:
@@ -58,22 +111,16 @@ def get_candidate_name(resume_chunks: List[str]) -> str:
 
 
 def is_human_round(interview_type: str) -> bool:
-    """Returns True for behavioral / HR rounds that must stay non-technical."""
     return (interview_type or "").strip().lower() in HUMAN_INTERVIEW_TYPES
 
 
 def _is_terminated(state: InterviewState) -> bool:
-    """
-    Returns True when the interview has already been ended — either by the
-    user clicking "End Interview" (timeout=True from __END__ signal) or by a
-    genuine wait timeout.  Any node can call this to short-circuit its work.
-    """
     return bool(state.get("timeout", False))
 
 
-# -----------------------------
-# Description parsing helpers
-# -----------------------------
+# ─────────────────────────────────────────────
+# DESCRIPTION / CONFIG PARSING
+# ─────────────────────────────────────────────
 
 _CUSTOM_CONFIG_RE = re.compile(
     r"__CUSTOM_CONFIG__(\{.*?\})__END_CONFIG__",
@@ -99,9 +146,9 @@ def strip_custom_config(description: str) -> str:
     return _CUSTOM_CONFIG_RE.sub("", description).strip()
 
 
-# -----------------------------
+# ─────────────────────────────────────────────
 # DIFFICULTY CONFIG
-# -----------------------------
+# ─────────────────────────────────────────────
 
 DEFAULT_DIFFICULTY_MAP = {
     0: "intro",
@@ -111,70 +158,21 @@ DEFAULT_DIFFICULTY_MAP = {
 }
 
 CUSTOM_DIFFICULTY_MAPS = {
-    "easy": {i: ("intro" if i == 0 else "easy") for i in range(15)},
-    "medium": {
-        0: "intro", 1: "easy", 2: "easy",
-        **{i: "medium" for i in range(3, 15)},
-    },
-    "hard": {
-        0: "intro", 1: "easy", 2: "medium",
-        **{i: "hard" for i in range(3, 15)},
-    },
+    "easy":   {i: ("intro" if i == 0 else "easy") for i in range(15)},
+    "medium": {0: "intro", 1: "easy", 2: "easy", **{i: "medium" for i in range(3, 15)}},
+    "hard":   {0: "intro", 1: "easy", 2: "medium", **{i: "hard" for i in range(3, 15)}},
 }
 
-DIFFICULTY_INSTRUCTIONS_TECHNICAL = {
-    "intro": (
-        "This is the OPENING question of the interview. "
-        "Ask the candidate to briefly introduce themselves — their background, current role, "
-        "and what brings them to this opportunity. Keep it warm, welcoming, and conversational. "
-        "Do NOT ask anything technical yet."
-    ),
-    "easy": (
-        "Ask a straightforward question about one of the candidate's listed skills or past experience. "
-        "It should be something any competent candidate in this role could answer confidently."
-    ),
-    "medium": (
-        "Ask a question that requires the candidate to demonstrate deeper knowledge or problem-solving. "
-        "Reference a specific skill, project, or scenario relevant to their background."
-    ),
-    "hard": (
-        "Ask a challenging, nuanced question — system design, architecture trade-offs, "
-        "advanced concepts, or a scenario that requires strong expertise. "
-        "Push the candidate to think critically."
-    ),
-}
+# Difficulty weights for score aggregation (harder questions count more)
+DIFFICULTY_WEIGHTS = {"intro": 0.3, "easy": 1.0, "medium": 1.5, "hard": 2.0}
 
-DIFFICULTY_INSTRUCTIONS_BEHAVIORAL = {
-    "intro": (
-        "This is the OPENING question. Ask the candidate to introduce themselves — "
-        "their background, career journey, and what excites them about this opportunity. "
-        "Keep it warm and conversational. Do NOT ask anything technical."
-    ),
-    "easy": (
-        "Ask a straightforward behavioral question using the STAR format "
-        "(Situation, Task, Action, Result). Focus on communication, teamwork, or work style. "
-        "Example themes: collaboration, time management, receiving feedback. "
-        "ABSOLUTELY NO technical or coding questions."
-    ),
-    "medium": (
-        "Ask a behavioral question probing leadership, conflict resolution, or adaptability. "
-        "The candidate should demonstrate self-awareness and interpersonal skills. "
-        "Use realistic workplace scenarios. "
-        "ABSOLUTELY NO technical or coding questions."
-    ),
-    "hard": (
-        "Ask a challenging behavioral question about high-stakes situations — "
-        "leading through ambiguity, handling failure, driving influence without authority, "
-        "or navigating difficult stakeholder dynamics. "
-        "ABSOLUTELY NO technical or coding questions."
-    ),
-}
+# Post-LLM scoring caps applied DETERMINISTICALLY based on missing concepts
+# If the candidate missed any key concept the score cannot exceed these ceilings.
+MISSING_CONCEPT_CAPS = {"intro": 10, "easy": 4, "medium": 6, "hard": 7}
 
-
-def get_difficulty_instruction(difficulty: str, interview_type: str) -> str:
-    if is_human_round(interview_type):
-        return DIFFICULTY_INSTRUCTIONS_BEHAVIORAL.get(difficulty, DIFFICULTY_INSTRUCTIONS_BEHAVIORAL["medium"])
-    return DIFFICULTY_INSTRUCTIONS_TECHNICAL.get(difficulty, DIFFICULTY_INSTRUCTIONS_TECHNICAL["medium"])
+# Absolute max scores per difficulty (a perfect answer on an easy question
+# cannot score the same as a perfect answer on a hard one)
+DIFFICULTY_MAX_SCORES = {"intro": 10, "easy": 8, "medium": 9, "hard": 10}
 
 
 def resolve_difficulty(index: int, description: str) -> str:
@@ -195,16 +193,86 @@ def resolve_max_questions(description: str) -> int:
     return DEFAULT_MAX_QUESTIONS
 
 
-BEHAVIORAL_FALLBACKS = {
-    "intro":  "Could you start by walking me through your background and what excites you about this opportunity?",
-    "easy":   "Tell me about a time you had to collaborate closely with a teammate who had a very different working style. How did you handle it?",
-    "medium": "Describe a situation where you had to manage a conflict within your team. What steps did you take and what was the outcome?",
-    "hard":   "Tell me about a time you had to drive an important initiative without having direct authority. How did you build alignment and what was the result?",
+def apply_difficulty_scoring_cap(
+    raw_score: int,
+    missing_concepts: List[str],
+    difficulty: str,
+) -> int:
+    """
+    Deterministic post-processing cap.
+    Ensures LLM cannot inflate scores when key concepts are absent.
+    """
+    # Cap by absolute difficulty ceiling
+    score = min(raw_score, DIFFICULTY_MAX_SCORES.get(difficulty, 10))
+
+    # Further cap if fundamentals are missing
+    if missing_concepts:
+        score = min(score, MISSING_CONCEPT_CAPS.get(difficulty, 6))
+
+    return max(0, score)
+
+
+# ─────────────────────────────────────────────
+# DIFFICULTY INSTRUCTIONS (question generation)
+# ─────────────────────────────────────────────
+
+DIFFICULTY_INSTRUCTIONS_TECHNICAL = {
+    "intro": (
+        "Opening question only. Ask the candidate to briefly introduce themselves — "
+        "background, current role, and what brings them here. Warm and conversational. "
+        "No technical content."
+    ),
+    "easy": (
+        "Ask a direct factual question about one skill or concept from the candidate's "
+        "profile that any competent engineer at this level should answer confidently "
+        "without hesitation."
+    ),
+    "medium": (
+        "Ask a question requiring genuine problem-solving or architectural reasoning. "
+        "Reference a specific technology, project, or trade-off relevant to their background."
+    ),
+    "hard": (
+        "Ask a challenging, nuanced question — system design, deep architecture trade-offs, "
+        "advanced algorithms, or a scenario requiring expert-level reasoning. "
+        "No softballing."
+    ),
 }
+
+DIFFICULTY_INSTRUCTIONS_BEHAVIORAL = {
+    "intro": (
+        "Opening question only. Ask the candidate to walk through their background and "
+        "what excites them about this opportunity. Conversational. No STAR required yet."
+    ),
+    "easy": (
+        "Ask a straightforward behavioral question with STAR structure expected. "
+        "Focus on collaboration, communication, or feedback reception. "
+        "ZERO technical content whatsoever."
+    ),
+    "medium": (
+        "Ask a behavioral question probing leadership, conflict resolution, or high-stakes "
+        "decisions. Expect full STAR with measurable outcomes. ZERO technical content."
+    ),
+    "hard": (
+        "Ask a challenging behavioral question about ambiguity, influence without authority, "
+        "organizational failure, or driving change. Full STAR + strong self-awareness expected. "
+        "ZERO technical content."
+    ),
+}
+
+
+def get_difficulty_instruction(difficulty: str, interview_type: str) -> str:
+    if is_human_round(interview_type):
+        return DIFFICULTY_INSTRUCTIONS_BEHAVIORAL.get(
+            difficulty, DIFFICULTY_INSTRUCTIONS_BEHAVIORAL["medium"]
+        )
+    return DIFFICULTY_INSTRUCTIONS_TECHNICAL.get(
+        difficulty, DIFFICULTY_INSTRUCTIONS_TECHNICAL["medium"]
+    )
 
 
 # ─────────────────────────────────────────────
 # PSYCHOLOGICAL AWARENESS LAYER
+# (kept for live UX — does NOT affect scoring)
 # ─────────────────────────────────────────────
 
 _UNCERTAINTY_RE = re.compile(
@@ -218,13 +286,18 @@ _UNCERTAINTY_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-
 _SHORT_ANSWER_WORDS = 8
 _PIVOT_THRESHOLD    = 3
 
+BEHAVIORAL_FALLBACKS = {
+    "intro":  "Could you start by walking me through your background and what excites you about this opportunity?",
+    "easy":   "Tell me about a time you had to collaborate closely with a teammate who had a very different working style. How did you handle it?",
+    "medium": "Describe a situation where you had to manage a conflict within your team. What steps did you take and what was the outcome?",
+    "hard":   "Tell me about a time you had to drive an important initiative without having direct authority. How did you build alignment and what was the result?",
+}
+
 
 def _is_uncertain(answer: str) -> bool:
-    """True if the answer looks like a struggle — explicit or implicit."""
     if not answer or not answer.strip():
         return True
     if _UNCERTAINTY_RE.search(answer):
@@ -242,55 +315,39 @@ def _build_supportive_response(
     interview_type: str,
     candidate_name: str,
 ) -> str:
+    """
+    Live interview support — separate from scoring.
+    This helps the candidate think; it does NOT inflate their score.
+    """
     human_round = is_human_round(interview_type)
     is_pivot    = consecutive_struggles >= _PIVOT_THRESHOLD
-
-    context_hint = (
-        "behavioral / HR interview focused on communication and interpersonal skills"
-        if human_round else
-        f"technical interview for a software engineering role (difficulty: {difficulty})"
-    )
 
     scaffold_hint = (
         "Ask them to recall any situation — even a small or informal one — "
         "that relates to the theme of the original question."
         if human_round else
-        "Try breaking the question into a simpler sub-concept, or invite them "
-        "to reason through a general approach even without the exact answer."
+        "Break the question into a simpler sub-concept, or invite them to reason "
+        "through a general approach even without the exact answer."
     )
 
     pivot_note = (
         "\nThis is their 3rd consecutive struggle. "
-        "Acknowledge it's a tough area, reassure them warmly, and gently say "
-        "you'll move on to something different — WITHOUT asking another question yet."
+        "Acknowledge the difficulty, say you'll move on — do NOT ask another question yet."
     ) if is_pivot else ""
 
-    no_tech_note = (
-        "\nABSOLUTE RULE: Zero technical content — this is a behavioral round."
-        if human_round else ""
+    no_tech_note = "\nABSOLUTE RULE: Zero technical content." if human_round else ""
+
+    prompt = (
+        f"You are an interviewer. The candidate just struggled with:\n"
+        f'"{last_question}"\n\n'
+        f'Their response: "{last_answer}"\n\n'
+        f"Struggle #{consecutive_struggles}.{pivot_note}{no_tech_note}\n\n"
+        "Generate a SHORT response (under 4 sentences) that:\n"
+        "1. Acknowledges their difficulty without being condescending.\n"
+        "2. Reduces pressure.\n"
+        f"3. {'Move on — do NOT ask another question.' if is_pivot else scaffold_hint}\n\n"
+        "Output ONLY what the interviewer says. No labels."
     )
-
-    prompt = f"""You are a warm, psychologically aware interviewer conducting a {context_hint}.
-
-The candidate ({candidate_name}) just responded to this question:
-"{last_question}"
-
-Their response was:
-"{last_answer}"
-
-They appear uncertain or stuck (consecutive struggle #{consecutive_struggles}).
-{pivot_note}
-{no_tech_note}
-
-Generate a SHORT interviewer response that:
-1. Acknowledges their difficulty without being condescending.
-2. Reduces pressure — remind them it is completely okay.
-3. {"Gently say you are moving on to something new." if is_pivot else scaffold_hint}
-4. {"Do NOT ask another question — just close this topic warmly." if is_pivot else "End with a simpler / reframed version of the question, or invite them to think aloud."}
-
-Tone: warm, encouraging, professional — like a senior interviewer who genuinely wants the candidate to succeed.
-
-Output ONLY what the interviewer says. No labels, no preamble. Under 4 sentences."""
 
     try:
         return llm.invoke([HumanMessage(content=prompt)]).content.strip()
@@ -298,21 +355,65 @@ Output ONLY what the interviewer says. No labels, no preamble. Under 4 sentences
         print(f"[_build_supportive_response] LLM error: {e}")
         if is_pivot:
             return (
-                f"That's completely fine, {candidate_name} — this is a genuinely tough area "
-                "and it's okay if it's not your strongest topic right now. "
-                "Let's move on and keep the conversation going."
-            )
-        if consecutive_struggles == 2:
-            return (
-                "No worries at all — let's try a different angle. "
-                "Even if you haven't seen this exact scenario before, "
-                "what would your general instinct or first step be?"
+                f"That's a tough area — completely fine. "
+                "Let's shift gears and move on to something else."
             )
         return (
-            "That's okay — take your time. "
-            "Even a rough thought or partial approach is great to hear. "
-            "What comes to mind first?"
+            "Take your time — even a rough first thought is useful. "
+            "What comes to mind first when you approach this?"
         )
+
+
+# ─────────────────────────────────────────────
+# GAP ANALYSIS ENGINE
+# ─────────────────────────────────────────────
+
+def compute_gap_analysis(history: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Deterministic gap analysis from stored interview history.
+    Returns:
+        repeated_gaps   — concepts missed in 2+ questions (systemic weakness)
+        all_gaps        — every unique missing concept
+        gap_frequency   — concept → count
+        weak_dimensions — average dimension score < 5 across all questions
+    """
+    all_missing: List[str] = []
+    all_incorrect: List[str] = []
+    dimension_totals: Dict[str, List[int]] = {}
+
+    for h in history:
+        all_missing.extend(h.get("missing_concepts", []))
+        all_incorrect.extend(h.get("incorrect_points", []))
+
+        dims = h.get("dimensions", {})
+        for dim, val in dims.items():
+            dimension_totals.setdefault(dim, []).append(int(val))
+
+    gap_frequency = dict(Counter(all_missing))
+    repeated_gaps = sorted(
+        [c for c, freq in gap_frequency.items() if freq >= 2],
+        key=lambda c: -gap_frequency[c],
+    )
+
+    incorrect_frequency = dict(Counter(all_incorrect))
+
+    # Dimensions where average < 5 — systemic weakness
+    weak_dimensions = []
+    dim_averages: Dict[str, float] = {}
+    for dim, scores in dimension_totals.items():
+        avg = round(sum(scores) / len(scores), 1)
+        dim_averages[dim] = avg
+        if avg < 5.0:
+            weak_dimensions.append(dim)
+
+    return {
+        "repeated_gaps":      repeated_gaps,
+        "all_gaps":           list(gap_frequency.keys()),
+        "gap_frequency":      gap_frequency,
+        "weak_dimensions":    weak_dimensions,
+        "dimension_averages": dim_averages,
+        "incorrect_points":   list(incorrect_frequency.keys()),
+    }
 
 
 # ─────────────────────────────────────────────
@@ -327,12 +428,12 @@ def load_context(state: InterviewState) -> dict:
     interview_type = state.get("interview_type", "technical")
 
     custom_config = parse_custom_config(description)
-    is_custom     = bool(custom_config)
     print(
-        f"[load_context] session_type={'custom' if is_custom else 'simple'}, "
+        f"[load_context] session_type={'custom' if custom_config else 'simple'}, "
         f"interview_type={interview_type}, config={custom_config}"
     )
 
+    # Qdrant — resume chunks
     try:
         results, _ = qdrant.scroll(
             collection_name=QDRANT_COLLECTION,
@@ -347,6 +448,7 @@ def load_context(state: InterviewState) -> dict:
         print(f"[load_context] Qdrant error: {e}")
         resume_chunks = []
 
+    # Neo4j — skills graph
     graph_skills: List[str] = []
     if not is_human_round(interview_type):
         try:
@@ -359,21 +461,24 @@ def load_context(state: InterviewState) -> dict:
         except Exception as e:
             print(f"[load_context] Neo4j error: {e}")
 
+    # Mem0 — past interview memories
     mem_query = role
     if custom_config.get("topics"):
         mem_query = f"{role} {', '.join(custom_config['topics'][:3])}"
     try:
         raw = memory_client.search(query=mem_query, user_id=user_id, limit=10)
-        memories = raw.get("results", []) if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+        memories = (
+            raw.get("results", []) if isinstance(raw, dict)
+            else (raw if isinstance(raw, list) else [])
+        )
     except Exception as e:
         print(f"[load_context] Mem0 error: {e}")
         memories = []
 
     candidate_name = get_candidate_name(resume_chunks)
-
     print(
-        f"[load_context] Skills: {len(graph_skills)}, Chunks: {len(resume_chunks)}, "
-        f"Memories: {len(memories)}, MaxQ: {resolve_max_questions(description)}"
+        f"[load_context] Skills={len(graph_skills)}, Chunks={len(resume_chunks)}, "
+        f"Memories={len(memories)}, MaxQ={resolve_max_questions(description)}"
     )
 
     return {
@@ -387,14 +492,20 @@ def load_context(state: InterviewState) -> dict:
         "consecutive_struggles": 0,
         "is_support_turn":       False,
         "timeout":               False,
+        "gap_map":               {},
     }
 
 
 # ─────────────────────────────────────────────
-# NODE 2: GENERATE QUESTION
+# NODE 2: GENERATE QUESTION  (+ expected answer)
 # ─────────────────────────────────────────────
 
 def generate_question(state: InterviewState) -> dict:
+    """
+    Single LLM call returns BOTH the question AND its expected answer.
+    The expected answer is stored in state and used later by evaluate_answer
+    for comparative evaluation instead of in-isolation scoring.
+    """
     print("[generate_question] started")
 
     index                 = state.get("current_index", 0)
@@ -410,12 +521,11 @@ def generate_question(state: InterviewState) -> dict:
     resume_chunks = [str(c) for c in (state.get("resume_context") or []) if c is not None]
     raw_memories  = [m for m in (state.get("memories") or []) if m is not None]
 
-    # If the interview has already been terminated, skip everything and
-    # propagate timeout so check_continue can finalize cleanly.
     if _is_terminated(state):
-        print("[generate_question] ⛔ Interview terminated — skipping question generation")
+        print("[generate_question] ⛔ Terminated — skipping")
         return {
             "current_question":      "",
+            "expected_answer":       {},
             "question_history":      question_history,
             "current_index":         index,
             "difficulty":            state.get("difficulty", "medium"),
@@ -427,20 +537,16 @@ def generate_question(state: InterviewState) -> dict:
         }
 
     custom_config     = parse_custom_config(description)
-    is_custom         = bool(custom_config)
     clean_description = strip_custom_config(description)
     custom_topics: List[str] = custom_config.get("topics", [])
-
     human_round = is_human_round(interview_type)
 
     print(
-        f"[generate_question] index={index}, interview_type={interview_type}, "
-        f"human_round={human_round}, consecutive_struggles={consecutive_struggles}"
+        f"[generate_question] index={index}, type={interview_type}, "
+        f"human_round={human_round}, struggles={consecutive_struggles}"
     )
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # PSYCHOLOGICAL CHECK
-    # ─────────────────────────────────────────────────────────────────────────
+    # ── PSYCHOLOGICAL CHECK ────────────────────────────────────────────────
     last_question = question_history[-1].get("question", "") if question_history else ""
 
     if index > 0 and _is_uncertain(last_answer):
@@ -455,16 +561,12 @@ def generate_question(state: InterviewState) -> dict:
             interview_type=interview_type,
             candidate_name=candidate_name,
         )
-
         is_pivot = new_struggles >= _PIVOT_THRESHOLD
-
-        print(
-            f"[generate_question] {'Pivoting' if is_pivot else 'Scaffolding'} "
-            f"(struggle {new_struggles}/{_PIVOT_THRESHOLD}): {supportive_text[:100]}…"
-        )
+        print(f"[generate_question] {'Pivoting' if is_pivot else 'Scaffolding'}: {supportive_text[:80]}…")
 
         return {
             "current_question":      supportive_text,
+            "expected_answer":       {},   # no expected answer for support turns
             "question_history":      question_history,
             "current_index":         index + 1 if is_pivot else index,
             "difficulty":            state.get("difficulty", "medium"),
@@ -475,12 +577,8 @@ def generate_question(state: InterviewState) -> dict:
             "timeout":               False,
         }
 
-    # Candidate answered confidently — reset struggle counter
-    new_struggles = 0
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Normal question generation
-    # ─────────────────────────────────────────────────────────────────────────
+    # ── NORMAL QUESTION GENERATION ────────────────────────────────────────
+    new_struggles          = 0
     difficulty             = resolve_difficulty(index, description)
     difficulty_instruction = get_difficulty_instruction(difficulty, interview_type)
 
@@ -494,109 +592,123 @@ def generate_question(state: InterviewState) -> dict:
 
     resume_text   = "\n\n".join(resume_chunks[:4])
     max_questions = resolve_max_questions(description)
-
     memories_text = json.dumps(
         [m.get("memory", str(m)) if isinstance(m, dict) else str(m) for m in raw_memories[:5]],
         indent=2,
     )
 
     topic_constraint = ""
-    if is_custom and custom_topics and not human_round:
+    if custom_config and custom_topics and not human_round:
         topic_constraint = (
-            f"\nFOCUS TOPICS (prioritise these): {', '.join(custom_topics)}.\n"
-            "Your question MUST relate to one of these topics unless this is the intro question.\n"
+            f"\nFOCUS TOPICS (must use one): {', '.join(custom_topics)}.\n"
         )
 
     extra_context_block = (
-        f"\nAdditional context for this session:\n\"\"\"\n{clean_description[:1500]}\n\"\"\"\n"
+        f"\nSession context:\n\"\"\"\n{clean_description[:1500]}\n\"\"\"\n"
         if clean_description else ""
     )
 
+    # ── Build prompt — returns JSON with question + expected_answer ─────────
     if human_round:
-        system_prompt = f"""You are an expert {interview_type.upper()} interviewer conducting a people-skills and culture-fit assessment for a {role} position.
+        expected_answer_schema = """{
+  "key_concepts": ["STAR structure used", "specific personal situation named", "measurable outcome stated", "lessons articulated"],
+  "reasoning_steps": ["Set the Situation clearly", "Define the Task/responsibility", "Describe YOUR specific Actions", "State the measurable Result"],
+  "ideal_structure": "2-4 minute STAR narrative with a clear 'I' (not 'we') focus, concrete outcome, and a reflection.",
+  "common_mistakes": ["Using 'we' instead of 'I'", "No measurable outcome", "Vague or generic situation", "Missing the Result or lesson"]
+}"""
+        system_prompt = f"""You are a strict {interview_type.upper()} interviewer for a {role} position.
 
-Candidate name: {candidate_name}
+Candidate: {candidate_name}
+Resume (background only — NO technical questions):
+\"\"\"{resume_text[:1500]}\"\"\"
 
-Resume excerpt (for background context ONLY — do NOT ask about technical details):
-\"\"\"
-{resume_text[:1500]}
-\"\"\"
-
-Past interview memories (if any):
-{memories_text[:600]}
+Memories: {memories_text[:400]}
 {extra_context_block}
-Previous questions asked (avoid repeating themes):
-{prev_qa_summary or "None yet."}
+Previous questions (do NOT repeat themes): {prev_qa_summary or "None yet."}
 
----
-CURRENT TASK — Question #{index + 1} of {max_questions} | Difficulty: {difficulty.upper()}
-
+TASK — Question #{index + 1} of {max_questions} | {difficulty.upper()}
 {difficulty_instruction}
 
-ABSOLUTE RULES — violating these disqualifies the question:
-1. ZERO technical content. Do not mention code, algorithms, data structures, system design,
-   databases, APIs, programming languages, frameworks, or any engineering concept.
-2. Every question must use the STAR behavioral format as the expected answer structure
-   (Situation, Task, Action, Result) unless this is the intro question.
-3. Output ONE question only — no preamble, no numbering, no explanation.
-4. Do not say "Sure" or "Here is your question" — just the question itself.
-5. Ground the question in real workplace situations (teamwork, leadership, communication,
-   conflict, growth, motivation, feedback, ambiguity).
-"""
+ABSOLUTE RULES:
+1. ZERO technical content — no code, algorithms, systems, APIs, frameworks, databases.
+2. Output ONLY valid JSON — no markdown, no commentary, no preamble.
+3. The expected_answer must be specific to THIS question, not generic.
+
+Return ONLY this JSON:
+{{
+  "question": "<the exact question to ask — one sentence, no numbering>",
+  "expected_answer": {{
+    "key_concepts": ["<concept 1>", "<concept 2>", "<concept 3>"],
+    "reasoning_steps": ["<STAR step 1>", "<STAR step 2>", "<STAR step 3>", "<STAR step 4>"],
+    "ideal_structure": "<what an ideal answer looks like — 1 sentence>",
+    "common_mistakes": ["<mistake 1>", "<mistake 2>", "<mistake 3>"]
+  }}
+}}"""
     else:
-        system_prompt = f"""You are an expert {interview_type} interviewer hiring for a {role} position.
+        system_prompt = f"""You are a strict {interview_type} interviewer hiring for a {role} position.
 
-Candidate name: {candidate_name}
-Skills on file: {", ".join(skills[:8]) if skills else "Not specified"}
+Candidate: {candidate_name}
+Skills: {", ".join(skills[:8]) if skills else "Not specified"}
+Resume:
+\"\"\"{resume_text[:2000]}\"\"\"
 
-Resume excerpt:
-\"\"\"
-{resume_text[:2000]}
-\"\"\"
-
-Past interview memories (if any):
-{memories_text[:800]}
+Memories: {memories_text[:600]}
 {extra_context_block}{topic_constraint}
-Previous questions asked (avoid repeating topics):
-{prev_qa_summary or "None yet."}
+Previous questions (do NOT repeat topics): {prev_qa_summary or "None yet."}
 
----
-CURRENT TASK — Question #{index + 1} of {max_questions} | Difficulty: {difficulty.upper()}
-
+TASK — Question #{index + 1} of {max_questions} | {difficulty.upper()}
 {difficulty_instruction}
 
-STRICT RULES:
-- Output ONE question only. No preamble, no explanation, no numbering.
-- Do not say "Sure" or "Here is your question" — just the question itself.
-- The question must be specific and relevant to this candidate's actual background.
-- Never repeat a topic already covered above.
-"""
+RULES:
+1. Output ONLY valid JSON — no markdown, no commentary, no preamble.
+2. The expected_answer must be specific to THIS question.
+3. key_concepts must be the EXACT technical concepts a correct answer requires.
+4. common_mistakes must name real misconceptions, not generic advice.
+
+Return ONLY this JSON:
+{{
+  "question": "<the exact question to ask — one sentence, no numbering>",
+  "expected_answer": {{
+    "key_concepts": ["<required concept 1>", "<required concept 2>", "<required concept 3>"],
+    "reasoning_steps": ["<step 1>", "<step 2>", "<step 3>"],
+    "ideal_structure": "<what a complete, correct answer covers — 1 sentence>",
+    "common_mistakes": ["<mistake 1>", "<mistake 2>", "<mistake 3>"]
+  }}
+}}"""
+
+    question        = ""
+    expected_answer = {}
 
     try:
-        response = llm.invoke([HumanMessage(content=system_prompt)])
-        question = response.content.strip()
+        response_text = llm.invoke([HumanMessage(content=system_prompt)]).content.strip()
+        parsed        = safe_json_parse(response_text)
+        question        = str(parsed.get("question", "")).strip()
+        expected_answer = parsed.get("expected_answer", {})
 
+        # Behavioral guard — re-generate if technical leakage detected
         if human_round:
-            tech_keywords = [
+            TECH_KEYWORDS = [
                 "algorithm", "code", "implement", "function", "database", "sql",
                 "api", "rest", "graphql", "system design", "data structure",
-                "big o", "complexity", "framework", "language", "runtime",
-                "deploy", "docker", "kubernetes", "cloud", "microservice",
-                "async", "thread", "cache", "index", "query", "schema",
+                "big o", "complexity", "framework", "runtime", "deploy",
+                "docker", "kubernetes", "microservice", "async", "thread",
+                "cache", "index", "query", "schema",
             ]
-            if any(kw in question.lower() for kw in tech_keywords):
-                print(f"[generate_question] ⚠️  Technical content detected in behavioral question — regenerating")
-                rejection_prompt = (
+            if any(kw in question.lower() for kw in TECH_KEYWORDS):
+                print("[generate_question] ⚠️  Technical leakage detected — regenerating")
+                retry_prompt = (
                     f"{system_prompt}\n\n"
-                    "⚠️  Your previous attempt contained technical content. "
-                    "That is NOT allowed. Generate a purely behavioral STAR-format question. "
-                    "Absolutely no mention of code, systems, or engineering concepts."
+                    "⚠️  Previous attempt leaked technical content. "
+                    "Regenerate a purely behavioral question with ZERO engineering concepts."
                 )
-                response = llm.invoke([HumanMessage(content=rejection_prompt)])
-                question = response.content.strip()
+                response_text   = llm.invoke([HumanMessage(content=retry_prompt)]).content.strip()
+                parsed          = safe_json_parse(response_text)
+                question        = str(parsed.get("question", "")).strip()
+                expected_answer = parsed.get("expected_answer", {})
 
     except Exception as e:
-        print(f"[generate_question] LLM error: {e}")
+        print(f"[generate_question] LLM/parse error: {e}")
+        # Deterministic fallback — question only; expected_answer is minimal
         if human_round:
             question = BEHAVIORAL_FALLBACKS.get(difficulty, BEHAVIORAL_FALLBACKS["easy"])
         elif difficulty == "intro":
@@ -604,7 +716,7 @@ STRICT RULES:
                 f"Hi {candidate_name}! Could you start by telling me a bit about yourself "
                 f"and what draws you to this {role} role?"
             )
-        elif is_custom and custom_topics:
+        elif custom_topics:
             question = (
                 f"Can you walk me through a challenging problem you solved involving "
                 f"{custom_topics[0]} and how you approached it?"
@@ -616,18 +728,28 @@ STRICT RULES:
                 f"{fallback_skill} and how you handled it?"
             )
 
+        # Minimal expected answer for fallback questions
+        expected_answer = {
+            "key_concepts":    ["relevant technical depth", "clear problem statement", "outcome"],
+            "reasoning_steps": ["Identify the problem", "Describe your approach", "Share the outcome"],
+            "ideal_structure": "Concise problem-solution-outcome narrative with specifics.",
+            "common_mistakes": ["Too vague", "No outcome mentioned", "No personal contribution"],
+        }
+
     entry = {
-        "question":   question,
-        "answer":     "",
-        "index":      index,
-        "difficulty": difficulty,
-        "timestamp":  int(time.time()),
+        "question":        question,
+        "expected_answer": expected_answer,
+        "answer":          "",
+        "index":           index,
+        "difficulty":      difficulty,
+        "timestamp":       int(time.time()),
     }
 
-    print(f"[generate_question] Q#{index + 1} ({difficulty}, {interview_type}): {question[:120]}...")
+    print(f"[generate_question] Q#{index+1} ({difficulty}): {question[:100]}…")
 
     return {
         "current_question":      question,
+        "expected_answer":       expected_answer,
         "question_history":      [*question_history, entry],
         "current_index":         index + 1,
         "difficulty":            difficulty,
@@ -647,19 +769,19 @@ def publish_question(state: InterviewState) -> dict:
     print("[publish_question] started")
 
     if _is_terminated(state):
-        print("[publish_question] ⛔ Interview terminated — skipping publish")
+        print("[publish_question] ⛔ Terminated — skipping")
         return {}
 
-    interview_id = state.get("interview_id")
-    index        = state.get("current_index", 1) - 1
-    difficulty   = state.get("difficulty", "intro")
-
+    interview_id      = state.get("interview_id")
+    index             = state.get("current_index", 1) - 1
+    difficulty        = state.get("difficulty", "intro")
     is_followup       = state.get("followup", False)
     followup_question = state.get("followup_question", "")
     is_support_turn   = state.get("is_support_turn", False)
-    question          = followup_question if is_followup and followup_question else state.get("current_question", "")
-
-    print(f"[publish_question] is_followup={is_followup}, is_support={is_support_turn}, question={question[:80]}...")
+    question          = (
+        followup_question if is_followup and followup_question
+        else state.get("current_question", "")
+    )
 
     publish_event(
         f"interview:{interview_id}:events",
@@ -677,69 +799,48 @@ def publish_question(state: InterviewState) -> dict:
 
 
 # ─────────────────────────────────────────────
-# NODE 4: WAIT FOR ANSWER  (race-condition fix)
+# NODE 4: WAIT FOR ANSWER
 # ─────────────────────────────────────────────
 
 def wait_for_answer(state: InterviewState) -> dict:
     print("[wait_for_answer] started")
 
-    # If already terminated, return immediately — don't block for 240s.
     if _is_terminated(state):
         print("[wait_for_answer] ⛔ Already terminated — returning immediately")
         return {"user_answer": "", "timeout": True}
 
     interview_id  = state.get("interview_id")
     answer_key    = f"interview:{interview_id}:latest_answer"
-    end_key       = f"interview:{interview_id}:ended"   # persistent flag set by Node server
+    end_key       = f"interview:{interview_id}:ended"
     ready_channel = f"interview:{interview_id}:answer_ready"
     timeout       = 240
 
-    # ── RACE-CONDITION FIX ────────────────────────────────────────────────────
-    # Redis pubsub does NOT queue messages — if __END__ was published before we
-    # subscribe, it's silently lost and the node blocks for the full 240 s.
-    #
-    # Solution: the Node server ALSO sets a persistent Redis key
-    # `interview:{id}:ended` (with EX 3600) when the user clicks "End Interview".
-    # We check this key BEFORE subscribing and once per second inside the loop,
-    # so the worst-case unblock latency is ~1 second regardless of pubsub timing.
-    # ─────────────────────────────────────────────────────────────────────────
-
-    # Check persistent end flag — covers the case where __END__ arrived before
-    # this function even started running.
+    # Check persistent end flag before subscribing (race-condition guard)
     if client.exists(end_key):
-        print("[wait_for_answer] ⛔ End flag already set — returning immediately")
+        print("[wait_for_answer] ⛔ End flag already set")
         return {"user_answer": "", "timeout": True}
 
-    # Drain any answer that was set before we subscribed (avoids a missed wakeup).
+    # Drain any answer already in the key
     raw = client.get(answer_key)
     if raw:
         client.delete(answer_key)
         answer = raw.decode("utf-8") if isinstance(raw, bytes) else raw
         if answer == "__END__":
-            print("[wait_for_answer] __END__ found in answer key before subscribe")
             return {"user_answer": "", "timeout": True}
-        print(f"[wait_for_answer] Answer found in key before subscribe: {answer[:80]}...")
         return {"user_answer": answer, "timeout": False}
 
-    # Subscribe then poll with a 1-second tick so we can check end_key each loop.
     sub   = client.pubsub()
     sub.subscribe(ready_channel)
     start = time.time()
 
     try:
         while True:
-            elapsed = time.time() - start
-            if elapsed > timeout:
+            if time.time() - start > timeout:
                 break
-
-            # Poll the persistent end flag every second — this is the fallback
-            # that guarantees termination even if the pubsub message was missed.
             if client.exists(end_key):
                 print("[wait_for_answer] ⛔ End flag detected during poll")
                 return {"user_answer": "", "timeout": True}
 
-            # Non-blocking get_message with a 1-second timeout per iteration.
-            # Unlike sub.listen() this doesn't block indefinitely between messages.
             message = sub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message is None:
                 continue
@@ -751,11 +852,9 @@ def wait_for_answer(state: InterviewState) -> dict:
                 client.delete(answer_key)
                 answer = raw.decode("utf-8") if isinstance(raw, bytes) else raw
                 if answer == "__END__":
-                    print("[wait_for_answer] __END__ received via pubsub — interview ended by user")
                     return {"user_answer": "", "timeout": True}
-                print(f"[wait_for_answer] Answer received: {answer[:80]}...")
+                print(f"[wait_for_answer] Answer received: {answer[:80]}…")
                 return {"user_answer": answer, "timeout": False}
-
     finally:
         try:
             sub.unsubscribe(ready_channel)
@@ -768,13 +867,22 @@ def wait_for_answer(state: InterviewState) -> dict:
 
 
 # ─────────────────────────────────────────────
-# NODE 5: EVALUATE ANSWER
+# NODE 5: EVALUATE ANSWER  (comparative, strict)
 # ─────────────────────────────────────────────
 
 def evaluate_answer(state: InterviewState) -> dict:
+    """
+    COMPARATIVE evaluation: user_answer is measured against expected_answer.
+    Scoring is strict:
+      - No generic praise.
+      - Missing concepts are named explicitly.
+      - Difficulty-aware caps are applied deterministically AFTER LLM output.
+    """
     print("[evaluate_answer] started")
+
     question        = state.get("current_question", "")
     answer          = state.get("user_answer", "")
+    expected_answer = state.get("expected_answer") or {}
     role            = state.get("role") or "Software Engineer"
     difficulty      = state.get("difficulty", "medium")
     interview_type  = state.get("interview_type", "technical")
@@ -782,124 +890,254 @@ def evaluate_answer(state: InterviewState) -> dict:
     timed_out       = state.get("timeout", False)
     is_support_turn = state.get("is_support_turn", False)
 
-    if timed_out or not answer.strip():
-        return {
-            "score":             0,
-            "confidence":        0.0,
-            "feedback":          "No answer was provided within the time limit.",
-            "followup":          False,
-            "followup_question": "",
-        }
+    _empty = {
+        "score":             0,
+        "confidence":        0.0,
+        "dimensions":        {},
+        "missing_concepts":  [],
+        "incorrect_points":  [],
+        "strengths":         [],
+        "weaknesses":        [],
+        "verdict":           "No answer was provided.",
+        "feedback":          "No answer was provided.",
+        "followup":          False,
+        "followup_question": "",
+    }
 
-    # Support turns are interviewer dialogue — don't score them.
+    if timed_out or not answer.strip():
+        return _empty
+
+    # Support turns are live UX responses — never scored
     if is_support_turn:
-        print("[evaluate_answer] Skipping — support turn, no scoring.")
+        print("[evaluate_answer] Skipping — support turn")
         return {
-            "score":             state.get("score", 5),
-            "confidence":        state.get("confidence", 0.5),
-            "feedback":          "",
+            "score":             state.get("score", 0),
+            "confidence":        state.get("confidence", 0.0),
+            "dimensions":        state.get("dimensions", {}),
+            "missing_concepts":  state.get("missing_concepts", []),
+            "incorrect_points":  state.get("incorrect_points", []),
+            "strengths":         state.get("strengths", []),
+            "weaknesses":        state.get("weaknesses", []),
+            "verdict":           state.get("verdict", ""),
+            "feedback":          state.get("feedback", ""),
             "followup":          False,
             "followup_question": "",
         }
 
     human_round = is_human_round(interview_type)
 
+    key_concepts_text    = json.dumps(expected_answer.get("key_concepts", []))
+    reasoning_steps_text = json.dumps(expected_answer.get("reasoning_steps", []))
+    ideal_structure_text = expected_answer.get("ideal_structure", "Not specified")
+    common_mistakes_text = json.dumps(expected_answer.get("common_mistakes", []))
+
+    # ── DIFFICULTY SCORING RULES ───────────────────────────────────────────
+    difficulty_rules = {
+        "intro": (
+            "This is an intro/self-introduction question. "
+            "Score 8-10 if the candidate gave a reasonable self-introduction. "
+            "Score below 6 only if the answer is completely off-topic or blank."
+        ),
+        "easy": (
+            "STRICT — easy questions test fundamentals. "
+            "If ANY key concept from the expected answer is absent → score cannot exceed 4. "
+            "A complete, correct answer deserves at most 8 (easy questions have a ceiling of 8). "
+            "Do not give 9 or 10 for an easy question."
+        ),
+        "medium": (
+            "MODERATE — medium questions require applied knowledge. "
+            "If more than half the key concepts are missing → score cannot exceed 6. "
+            "Partial credit allowed up to 7 for answers that cover core concepts but lack depth."
+        ),
+        "hard": (
+            "LENIENT ON PARTIAL — hard questions are genuinely difficult. "
+            "Award partial credit generously if the candidate demonstrates correct reasoning "
+            "even without the complete answer. Full marks (9-10) only for truly complete answers."
+        ),
+    }.get(difficulty, "")
+
     if human_round:
-        prompt = f"""You are evaluating a candidate's response in a {interview_type.upper()} interview for a {role} position.
+        eval_prompt = f"""You are a strict behavioral interview evaluator. 
+Role: {role} | Difficulty: {difficulty.upper()}
 
-Question (Difficulty: {difficulty.upper()}):
+QUESTION ASKED:
 {question}
 
-Candidate's Answer:
+WHAT A STRONG ANSWER REQUIRES:
+- Key concepts: {key_concepts_text}
+- Ideal structure: {ideal_structure_text}
+- Common mistakes to watch for: {common_mistakes_text}
+
+CANDIDATE'S ACTUAL ANSWER:
 {answer}
 
-Evaluate using BEHAVIORAL criteria ONLY (STAR framework, communication, self-awareness, leadership, interpersonal skills).
-Do NOT evaluate technical knowledge.
+SCORING RULES:
+{difficulty_rules}
 
-Return ONLY valid JSON:
+General rules:
+- Do NOT use generic phrases like "great job", "good attempt", "nice work".
+- Name specific things the candidate said (or failed to say).
+- Use "you" — never "the candidate".
+- missing_concepts must list EXACTLY which key concepts were absent from the answer.
+- If the answer is vague and hits no concrete STAR element → score ≤ 4.
+- A score of 7+ requires clear Situation, Task, Action, AND Result with measurable impact.
+
+Dimensions for behavioral evaluation:
+- star_structure (0-10): How well the STAR format was followed
+- self_awareness (0-10): Reflection on own role, mistakes, growth
+- clarity (0-10): How clearly and concisely the story was told
+- communication (0-10): Professional tone, structured delivery
+
+Return ONLY valid JSON — no markdown, no extra keys:
 {{
   "score": <integer 0-10>,
-  "confidence": <float 0.0-1.0>,
-  "feedback": "<constructive 1-2 sentence feedback on communication and STAR structure>",
-  "followup": <true if a clarifying behavioral follow-up would add value, otherwise false>,
-  "followup_question": "<short behavioral follow-up question, or empty string>"
-}}
-
-Scoring guide (behavioral):
-- 0-2: Off-topic, evasive, or blank
-- 3-4: Vague, missing most STAR elements
-- 5-6: Adequate — hits most STAR elements but lacks depth
-- 7-8: Strong — clear situation, actions, and measurable result
-- 9-10: Exceptional — compelling narrative, strong self-awareness, clear impact
-
-Return only the JSON. No markdown, no explanation.
-"""
+  "confidence": <float 0.0-1.0 — your confidence this score is accurate>,
+  "dimensions": {{
+    "star_structure": <0-10>,
+    "self_awareness": <0-10>,
+    "clarity": <0-10>,
+    "communication": <0-10>
+  }},
+  "missing_concepts": ["<concept absent from the answer>", ...],
+  "incorrect_points": ["<anything factually wrong or misleading>", ...],
+  "strengths": ["<specific thing done well — under 15 words>", ...],
+  "weaknesses": ["<specific gap — name what was missing — under 15 words>", ...],
+  "verdict": "<1 sentence brutally honest summary of this answer>",
+  "followup": <true if a clarifying question would add meaningful signal>,
+  "followup_question": "<specific behavioral follow-up, or empty string>"
+}}"""
     else:
-        prompt = f"""You are evaluating a candidate for a {role} position.
+        eval_prompt = f"""You are a strict technical interview evaluator (FAANG standard).
+Role: {role} | Difficulty: {difficulty.upper()}
+Candidate's known skills: {', '.join(skills[:6]) if skills else 'Not specified'}
 
-Question (Difficulty: {difficulty.upper()}):
+QUESTION ASKED:
 {question}
 
-Candidate's Answer:
+WHAT A CORRECT ANSWER REQUIRES:
+- Key concepts: {key_concepts_text}
+- Reasoning steps: {reasoning_steps_text}
+- Ideal structure: {ideal_structure_text}
+- Common mistakes: {common_mistakes_text}
+
+CANDIDATE'S ACTUAL ANSWER:
 {answer}
 
-Candidate's Known Skills: {", ".join(skills[:6]) if skills else "Not specified"}
+SCORING RULES:
+{difficulty_rules}
 
-Evaluate and return ONLY valid JSON:
+General rules:
+- Do NOT use generic phrases. Name specific concepts.
+- Use "you" — never "the candidate".
+- missing_concepts must list exactly which key concepts from the expected answer were absent.
+- incorrect_points must name specific factual errors or misconceptions.
+- A score of 7+ requires that the majority of key concepts are correctly addressed.
+- Do not reward confidence without correctness.
+
+Dimensions for technical evaluation:
+- correctness (0-10): Are the technical facts accurate?
+- depth (0-10): Does the answer go beyond surface-level?
+- clarity (0-10): Is the explanation clear and well-structured?
+- communication (0-10): Is it professional and articulate?
+
+Return ONLY valid JSON — no markdown, no extra keys:
 {{
   "score": <integer 0-10>,
   "confidence": <float 0.0-1.0>,
-  "feedback": "<constructive 1-2 sentence feedback>",
-  "followup": <true if a follow-up would add value, otherwise false>,
-  "followup_question": "<short follow-up question, or empty string if followup is false>"
-}}
-
-Scoring guide:
-- 0-2: Off-topic or blank
-- 3-4: Vague, minimal understanding
-- 5-6: Adequate, covers basics
-- 7-8: Strong, well-structured
-- 9-10: Exceptional, demonstrates mastery
-
-Return only the JSON. No markdown, no explanation.
-"""
+  "dimensions": {{
+    "correctness": <0-10>,
+    "depth": <0-10>,
+    "clarity": <0-10>,
+    "communication": <0-10>
+  }},
+  "missing_concepts": ["<key concept absent>", ...],
+  "incorrect_points": ["<specific error or misconception>", ...],
+  "strengths": ["<specific correct thing — under 15 words>", ...],
+  "weaknesses": ["<specific gap or error — name the concept — under 15 words>", ...],
+  "verdict": "<1 sentence brutally honest summary>",
+  "followup": <true if a probing technical follow-up would add signal>,
+  "followup_question": "<specific follow-up, or empty string>"
+}}"""
 
     try:
-        result = llm_eval.invoke([HumanMessage(content=prompt)]).content
-        parsed = safe_json_parse(result)
-        parsed["score"]      = max(0, min(10, int(parsed.get("score", 5))))
-        parsed["confidence"] = max(0.0, min(1.0, float(parsed.get("confidence", 0.5))))
-        parsed.setdefault("followup", False)
-        parsed.setdefault("followup_question", "")
-        parsed.setdefault("feedback", "")
+        result_text = llm_eval.invoke([HumanMessage(content=eval_prompt)]).content
+        parsed      = safe_json_parse(result_text)
+
+        # ── DETERMINISTIC POST-PROCESSING ─────────────────────────────────
+        raw_score       = max(0, min(10, int(parsed.get("score", 0))))
+        missing_concepts = [str(c) for c in parsed.get("missing_concepts", []) if c]
+
+        # Apply difficulty-aware cap — LLM cannot override this
+        final_score = apply_difficulty_scoring_cap(raw_score, missing_concepts, difficulty)
+
+        confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0.5))))
+
+        # Ensure dimensions are integers 0-10
+        raw_dims = parsed.get("dimensions", {})
+        dimensions = {
+            k: max(0, min(10, int(v)))
+            for k, v in raw_dims.items()
+            if isinstance(v, (int, float))
+        }
+
+        verdict = str(parsed.get("verdict", "")).strip()
+
+        result = {
+            "score":             final_score,
+            "confidence":        confidence,
+            "dimensions":        dimensions,
+            "missing_concepts":  missing_concepts,
+            "incorrect_points":  [str(p) for p in parsed.get("incorrect_points", []) if p],
+            "strengths":         [str(s) for s in parsed.get("strengths", []) if s],
+            "weaknesses":        [str(w) for w in parsed.get("weaknesses", []) if w],
+            "verdict":           verdict,
+            "feedback":          verdict,   # backward-compat alias
+            "followup":          bool(parsed.get("followup", False)),
+            "followup_question": str(parsed.get("followup_question", "")),
+        }
+
     except Exception as e:
         print(f"[evaluate_answer] Parse error: {e}")
-        parsed = {
-            "score":             5,
-            "confidence":        0.5,
-            "feedback":          "Could not evaluate this answer automatically.",
+        result = {
+            "score":             0,
+            "confidence":        0.0,
+            "dimensions":        {},
+            "missing_concepts":  [],
+            "incorrect_points":  [],
+            "strengths":         [],
+            "weaknesses":        ["Evaluation failed — answer could not be processed."],
+            "verdict":           "Evaluation error.",
+            "feedback":          "Evaluation error.",
             "followup":          False,
             "followup_question": "",
         }
 
-    print(f"[evaluate_answer] Score: {parsed['score']}/10 | Followup: {parsed['followup']}")
-    return parsed
+    print(
+        f"[evaluate_answer] Score: {result['score']}/10 | "
+        f"Missing: {result['missing_concepts'][:3]} | "
+        f"Followup: {result['followup']}"
+    )
+    return result
 
 
 # ─────────────────────────────────────────────
-# NODE 6: STORE STEP
+# NODE 6: STORE STEP  (full structured data)
 # ─────────────────────────────────────────────
 
 def store_step(state: InterviewState) -> dict:
+    """
+    Stores the FULL structured interview step — not just score + feedback.
+    Includes expected_answer, dimensional breakdown, and comparative analysis.
+    """
     print("[store_step] started")
+
     interview_id     = state.get("interview_id")
     question_history = state.get("question_history", [])
     current_index    = state.get("current_index", 1)
     is_support_turn  = state.get("is_support_turn", False)
 
-    # Support turns are interviewer dialogue — don't write them as Q&A entries.
     if is_support_turn:
-        print("[store_step] Skipping — support turn.")
+        print("[store_step] Skipping — support turn")
         return {
             "question_history":  question_history,
             "followup":          False,
@@ -908,9 +1146,8 @@ def store_step(state: InterviewState) -> dict:
             "is_support_turn":   False,
         }
 
-    # Don't write an empty/junk step when the interview was terminated.
     if _is_terminated(state):
-        print("[store_step] ⛔ Interview terminated — skipping step storage.")
+        print("[store_step] ⛔ Terminated — skipping")
         return {
             "question_history":  question_history,
             "followup":          False,
@@ -922,13 +1159,20 @@ def store_step(state: InterviewState) -> dict:
 
     history_index = current_index - 1
 
+    # Full structured entry — every field the evaluation produced
     entry = {
         "index":             history_index,
         "question":          state.get("current_question", ""),
-        "answer":            state.get("user_answer", ""),
+        "expected_answer":   state.get("expected_answer", {}),
+        "user_answer":       state.get("user_answer", ""),
         "score":             state.get("score", 0),
         "confidence":        state.get("confidence", 0.0),
-        "feedback":          state.get("feedback", ""),
+        "dimensions":        state.get("dimensions", {}),
+        "missing_concepts":  state.get("missing_concepts", []),
+        "incorrect_points":  state.get("incorrect_points", []),
+        "strengths":         state.get("strengths", []),
+        "weaknesses":        state.get("weaknesses", []),
+        "verdict":           state.get("verdict", ""),
         "difficulty":        state.get("difficulty", "unknown"),
         "followup":          state.get("followup", False),
         "followup_question": state.get("followup_question", ""),
@@ -937,12 +1181,23 @@ def store_step(state: InterviewState) -> dict:
 
     client.rpush(f"interview:{interview_id}:history", json.dumps(entry))
 
+    # Update in-memory history for finalize
     updated_history = list(question_history)
     if updated_history and updated_history[-1].get("index") == history_index:
-        updated_history[-1]["answer"] = entry["answer"]
-        updated_history[-1]["score"]  = entry["score"]
+        updated_history[-1].update({
+            "answer":          entry["user_answer"],
+            "score":           entry["score"],
+            "dimensions":      entry["dimensions"],
+            "missing_concepts": entry["missing_concepts"],
+            "strengths":       entry["strengths"],
+            "weaknesses":      entry["weaknesses"],
+            "verdict":         entry["verdict"],
+        })
 
-    print(f"[store_step] Stored step #{history_index} | current_index stays at {current_index}")
+    print(
+        f"[store_step] Stored step #{history_index} | "
+        f"score={entry['score']} | missing={entry['missing_concepts'][:2]}"
+    )
 
     return {
         "question_history":  updated_history,
@@ -967,70 +1222,32 @@ def check_continue(state: InterviewState) -> dict:
     timed_out       = bool(state.get("timeout"))
 
     print(
-        f"[check_continue] current_index={current_index}, "
-        f"max={max_questions}, timeout={timed_out}, support_turn={is_support_turn}"
+        f"[check_continue] index={current_index}, max={max_questions}, "
+        f"timeout={timed_out}, support_turn={is_support_turn}"
     )
 
-    # HARD TERMINATION — interview was ended manually or timed out
     if timed_out:
-        print("[check_continue] ⛔ Interview terminated — moving to finalize")
-        return {
-            "interview_complete": True,
-            "timeout":            True,
-        }
+        return {"interview_complete": True, "timeout": True}
 
-    # Support turns do NOT count as a real question
     if is_support_turn:
-        print("[check_continue] → support turn, looping back")
-        return {
-            "interview_complete": False,
-            "timeout":            False,
-        }
+        return {"interview_complete": False, "timeout": False}
 
-    # Normal completion condition
     if current_index >= max_questions:
         print("[check_continue] → max questions reached, finalizing")
-        return {
-            "interview_complete": True,
-            "timeout":            False,
-        }
+        return {"interview_complete": True, "timeout": False}
 
-    print(f"[check_continue] → continuing, next question #{current_index + 1}")
-    return {
-        "interview_complete": False,
-        "timeout":            False,
-    }
+    print(f"[check_continue] → continuing, next Q#{current_index + 1}")
+    return {"interview_complete": False, "timeout": False}
 
 
 # ─────────────────────────────────────────────
-# NODE 8: FINALIZE
+# NODE 8: FINALIZE  (deterministic step 1 + LLM step 2)
 # ─────────────────────────────────────────────
 
 SKILL_SCORE_DIMENSIONS = {
-    "behavioral": [
-        "Communication",
-        "Self-Awareness",
-        "Leadership",
-        "Conflict Resolution",
-        "Adaptability",
-        "Teamwork",
-    ],
-    "hr": [
-        "Communication",
-        "Professionalism",
-        "Culture Fit",
-        "Motivation",
-        "Self-Awareness",
-        "Negotiation Readiness",
-    ],
-    "default": [
-        "Communication",
-        "Technical Depth",
-        "Problem Solving",
-        "Clarity",
-        "Domain Knowledge",
-        "Confidence",
-    ],
+    "behavioral": ["Communication", "Self-Awareness", "Leadership", "Conflict Resolution", "Adaptability", "Teamwork"],
+    "hr":         ["Communication", "Professionalism", "Culture Fit", "Motivation", "Self-Awareness", "Negotiation Readiness"],
+    "default":    ["Communication", "Technical Depth", "Problem Solving", "Clarity", "Domain Knowledge", "Confidence"],
 }
 
 
@@ -1038,8 +1255,132 @@ def get_skill_dimensions(interview_type: str) -> List[str]:
     key = (interview_type or "").strip().lower()
     return SKILL_SCORE_DIMENSIONS.get(key, SKILL_SCORE_DIMENSIONS["default"])
 
+
+def _compute_deterministic_summary(
+    history: List[Dict[str, Any]],
+    interview_type: str,
+) -> Dict[str, Any]:
+    """
+    STEP 1 — pure deterministic computation.
+    No LLM involved. Returns a structured facts dict that the LLM
+    in step 2 will narrate (but cannot contradict or invent).
+    """
+    if not history:
+        return {}
+
+    # ── Score aggregation ──────────────────────────────────────────────────
+    raw_scores    = [float(h.get("score", 0)) for h in history]
+    plain_avg     = round(sum(raw_scores) / len(raw_scores), 2) if raw_scores else 0.0
+
+    # Difficulty-weighted average
+    weighted_sum  = sum(
+        float(h.get("score", 0)) * DIFFICULTY_WEIGHTS.get(h.get("difficulty", "medium"), 1.0)
+        for h in history
+    )
+    total_weight  = sum(
+        DIFFICULTY_WEIGHTS.get(h.get("difficulty", "medium"), 1.0)
+        for h in history
+    )
+    weighted_avg  = round(weighted_sum / total_weight, 2) if total_weight > 0 else plain_avg
+    overall_100   = round(weighted_avg * 10)
+
+    # ── Recommendation (hard rule — no LLM) ───────────────────────────────
+    if weighted_avg >= 8.0:
+        recommendation = "Strong Hire"
+    elif weighted_avg >= 6.5:
+        recommendation = "Hire"
+    elif weighted_avg >= 5.0:
+        recommendation = "Needs More Evaluation"
+    else:
+        recommendation = "No Hire"
+
+    # ── Aggregated strengths / weaknesses ─────────────────────────────────
+    all_strengths:  List[str] = []
+    all_weaknesses: List[str] = []
+
+    for h in history:
+        all_strengths.extend(h.get("strengths", []))
+        all_weaknesses.extend(h.get("weaknesses", []))
+
+    strength_counts  = Counter(all_strengths)
+    weakness_counts  = Counter(all_weaknesses)
+    top_strengths    = [s for s, _ in strength_counts.most_common(5)]
+    top_weaknesses   = [w for w, _ in weakness_counts.most_common(5)]
+
+    # ── Gap analysis ───────────────────────────────────────────────────────
+    gap_data = compute_gap_analysis(history)
+
+    # ── Dimension averages ─────────────────────────────────────────────────
+    dimension_totals: Dict[str, List[float]] = {}
+    for h in history:
+        for dim, val in (h.get("dimensions") or {}).items():
+            dimension_totals.setdefault(dim, []).append(float(val))
+
+    dim_averages = {
+        dim: round(sum(vals) / len(vals), 1)
+        for dim, vals in dimension_totals.items()
+    }
+
+    # ── Per-question score summary ─────────────────────────────────────────
+    question_scores = [
+        {
+            "index":            h.get("index", i),
+            "score":            round(float(h.get("score", 0)) * 10),   # 0–100
+            "difficulty":       h.get("difficulty", "unknown"),
+            "question":         h.get("question", ""),
+            "verdict":          h.get("verdict", ""),
+            "missing_concepts": h.get("missing_concepts", []),
+            "strengths":        h.get("strengths", []),
+            "weaknesses":       h.get("weaknesses", []),
+            "timestamp":        h.get("timestamp", 0),
+        }
+        for i, h in enumerate(history)
+    ]
+
+    # ── Skill dimension scores (deterministic from dim_averages) ───────────
+    skill_dimensions = get_skill_dimensions(interview_type)
+    # Map LLM dimension keys → display skill names (best-effort)
+    dim_key_map = {
+        # technical
+        "correctness":     "Technical Depth",
+        "depth":           "Technical Depth",
+        "clarity":         "Clarity",
+        "communication":   "Communication",
+        # behavioral
+        "star_structure":  "Communication",
+        "self_awareness":  "Self-Awareness",
+    }
+    skill_scores: Dict[str, int] = {}
+    for dim_key, avg in dim_averages.items():
+        display_name = dim_key_map.get(dim_key)
+        if display_name and display_name in skill_dimensions:
+            skill_scores[display_name] = round(avg * 10)
+
+    # Fill any remaining skill dimensions with overall_100 as baseline
+    for dim in skill_dimensions:
+        if dim not in skill_scores:
+            skill_scores[dim] = overall_100
+
+    return {
+        "plain_avg":        plain_avg,
+        "weighted_avg":     weighted_avg,
+        "overall_100":      overall_100,
+        "recommendation":   recommendation,
+        "top_strengths":    top_strengths,
+        "top_weaknesses":   top_weaknesses,
+        "repeated_gaps":    gap_data["repeated_gaps"],
+        "all_gaps":         gap_data["all_gaps"],
+        "gap_frequency":    gap_data["gap_frequency"],
+        "weak_dimensions":  gap_data["weak_dimensions"],
+        "dim_averages":     dim_averages,
+        "skill_scores":     skill_scores,
+        "question_scores":  question_scores,
+    }
+
+
 def finalize(state: InterviewState) -> dict:
     print("[finalize] started")
+
     interview_id     = state.get("interview_id")
     user_id          = state.get("user_id")
     role             = state.get("role") or "Software Engineer"
@@ -1053,24 +1394,10 @@ def finalize(state: InterviewState) -> dict:
     custom_config            = parse_custom_config(description)
     custom_topics: List[str] = custom_config.get("topics", [])
     difficulty_override: str = custom_config.get("difficulty_override", "")
-    skill_dimensions         = get_skill_dimensions(interview_type)
 
+    # Load full history from Redis
     raw_history = client.lrange(f"interview:{interview_id}:history", 0, -1)
     history     = [json.loads(h) for h in raw_history]
-
-    question_scores = [
-        {
-            "index":      h.get("index", i),
-            "score":      round(h.get("score", 0) * 10),
-            "difficulty": h.get("difficulty", "unknown"),
-            "question":   h.get("question", ""),
-            "feedback":   h.get("feedback", ""),
-            # NEW — per-question verdict populated by the finalize LLM below
-            "verdict":    "",
-            "timestamp":  h.get("timestamp", 0),
-        }
-        for i, h in enumerate(history)
-    ]
 
     if not history:
         summary_payload = {
@@ -1084,195 +1411,194 @@ def finalize(state: InterviewState) -> dict:
             "summary":          "No questions were answered.",
             "what_went_right":  [],
             "what_went_wrong":  [],
+            "strengths":        [],
+            "weaknesses":       [],
             "tips":             [],
             "skill_scores":     {},
             "question_scores":  [],
+            "gap_analysis":     {},
         }
     else:
-        raw_scores    = [h.get("score", 0) for h in history]
-        avg_score_10  = round(sum(raw_scores) / len(raw_scores), 1) if raw_scores else 0
-        avg_score_100 = round(avg_score_10 * 10)
+        # ──────────────────────────────────────────────────────────────────
+        # STEP 1 — DETERMINISTIC COMPUTATION
+        # ──────────────────────────────────────────────────────────────────
+        facts = _compute_deterministic_summary(history, interview_type)
 
-        extra_context_lines = ""
+        overall_100    = facts["overall_100"]
+        recommendation = facts["recommendation"]
+        skill_scores   = facts["skill_scores"]
+        question_scores = facts["question_scores"]
+
+        extra_context = ""
         if custom_topics and not human_round:
-            extra_context_lines += f"\nFocus topics tested: {', '.join(custom_topics)}."
+            extra_context += f"\nTopics tested: {', '.join(custom_topics)}."
         if difficulty_override:
-            extra_context_lines += f"\nSession difficulty setting: {difficulty_override}."
+            extra_context += f"\nDifficulty setting: {difficulty_override}."
         clean_description = strip_custom_config(description)
         if clean_description:
-            extra_context_lines += f"\nSession context: {clean_description[:400]}"
+            extra_context += f"\nSession context: {clean_description[:300]}"
 
-        skill_scores_schema = ",\n    ".join(
-            f'"{dim}": <integer 0-100>' for dim in skill_dimensions
-        )
+        # ──────────────────────────────────────────────────────────────────
+        # STEP 2 — LLM NARRATION (facts only, no invention)
+        # The LLM receives the computed facts and NARRATES them.
+        # It cannot change scores, invent strengths, or hallucinate gaps.
+        # ──────────────────────────────────────────────────────────────────
 
-        evaluation_criteria = (
-            "Evaluate purely on BEHAVIORAL dimensions: communication, STAR structure, "
-            "self-awareness, leadership, culture fit. Zero technical content."
-            if human_round else
-            "Evaluate on technical accuracy, depth, communication, and problem-solving."
-        )
-
-        # Build a compact Q&A block for the prompt
+        # Build compact Q&A block with verdicts for the LLM to reference
         qa_block = ""
         for i, h in enumerate(history):
             qa_block += (
                 f"Q{i+1} [{h.get('difficulty','?')}]: {h.get('question','')}\n"
-                f"Answer: {h.get('answer','(no answer)')}\n"
-                f"Score: {h.get('score',0)}/10\n\n"
+                f"Answer: {h.get('user_answer','(no answer)')}\n"
+                f"Score: {h.get('score',0)}/10 | Verdict: {h.get('verdict','')}\n"
+                f"Missing: {', '.join(h.get('missing_concepts',[]) or []) or 'none'}\n\n"
             )
 
-        prompt = f"""You are a strict, honest interview evaluator. Be specific — reference what the candidate actually said.
-Never use generic phrases like "good job", "needs improvement", or "the candidate".
-Always say "you" when addressing the candidate.
+        narration_prompt = f"""You are writing a post-interview report for a candidate.
+You MUST narrate ONLY the facts provided below. Do NOT invent, inflate, or soften anything.
+Use "you" when addressing the candidate. Be direct. No filler phrases.
 
-Role: {role} | Type: {interview_type} | Candidate: {candidate_name}
-{extra_context_lines}
+COMPUTED FACTS (authoritative — do not contradict):
+- Overall score: {overall_100}/100
+- Weighted average (0-10): {facts['weighted_avg']}
+- Recommendation: {recommendation}
+- Top strengths: {json.dumps(facts['top_strengths'])}
+- Top weaknesses: {json.dumps(facts['top_weaknesses'])}
+- Repeated gaps (missed in 2+ questions): {json.dumps(facts['repeated_gaps'])}
+- Weak dimensions (avg < 5): {json.dumps(facts['weak_dimensions'])}
+- Dimension averages: {json.dumps(facts['dim_averages'])}
+{extra_context}
 
-{evaluation_criteria}
-
-Full Q&A (scores 0-10):
+Full Q&A with verdicts:
 {qa_block[:4000]}
-
-Average score: {avg_score_10}/10
 
 Return ONLY valid JSON — no markdown, no extra keys:
 {{
-  "overall_score": <integer 0-100, weighted by difficulty>,
-  "recommendation": "<Hire | Strong Hire | No Hire | Needs More Evaluation>",
-
-  "summary": "<2 sentences MAX. First: what you demonstrated overall. Second: the single biggest gap.>",
-
+  "summary": "<2 sentences. First: what you demonstrated overall (reference actual answers). Second: your single biggest gap (name the concept).>",
   "what_went_right": [
-    {{ "point": "<specific thing you said or did correctly — under 20 words>", "tag": "<Core|Design|Clarity|Speed|Structure|STAR>" }},
-    {{ "point": "<specific thing you said or did correctly — under 20 words>", "tag": "<Core|Design|Clarity|Speed|Structure|STAR>" }},
-    {{ "point": "<specific thing you said or did correctly — under 20 words>", "tag": "<Core|Design|Clarity|Speed|Structure|STAR>" }}
+    {{"point": "<specific thing from the actual answers — under 20 words>", "tag": "<Core|Clarity|Structure|STAR|Design>"}},
+    {{"point": "<specific thing>", "tag": "<tag>"}},
+    {{"point": "<specific thing>", "tag": "<tag>"}}
   ],
-
   "what_went_wrong": [
-    {{ "point": "<specific gap or mistake — name the concept you missed — under 20 words>", "tag": "<Gap|Depth|Pace|Structure|STAR>" }},
-    {{ "point": "<specific gap or mistake — name the concept you missed — under 20 words>", "tag": "<Gap|Depth|Pace|Structure|STAR>" }},
-    {{ "point": "<specific gap or mistake — name the concept you missed — under 20 words>", "tag": "<Gap|Depth|Pace|Structure|STAR>" }}
+    {{"point": "<specific gap — name the missing concept — under 20 words>", "tag": "<Gap|Depth|Structure|STAR|Pace>"}},
+    {{"point": "<specific gap>", "tag": "<tag>"}},
+    {{"point": "<specific gap>", "tag": "<tag>"}}
   ],
-
   "tips": [
     "<actionable fix starting with a verb — under 20 words>",
-    "<actionable fix starting with a verb — under 20 words>",
-    "<actionable fix starting with a verb — under 20 words>"
-  ],
-
-  "skill_scores": {{
-    {skill_scores_schema}
-  }},
-
-  "question_verdicts": [
-    {{
-      "index": <0-based int matching the Q&A above>,
-      "verdict": "<1-2 sentences: what you answered correctly AND what was missing or vague>"
-    }}
+    "<actionable fix>",
+    "<actionable fix>"
   ]
 }}
 
 Rules:
-- Every point in what_went_right/what_went_wrong MUST reference something from the actual answers above.
-- Tips must start with a verb (e.g. "Always mention...", "Lead with...", "Practice...").
-- question_verdicts must cover every question in the Q&A — same count.
-- No bullet points inside strings. No markdown.
+- Every point in what_went_right/wrong MUST reference something from the actual Q&A.
+- Tips must start with a verb (Always..., Lead with..., Practice..., Study...).
+- No bullet characters inside strings. No markdown.
+- Do not use "good job", "great answer", "nice work", "the candidate".
 """
 
         try:
-            result = llm_eval.invoke([HumanMessage(content=prompt)]).content
-            parsed = safe_json_parse(result)
+            result_text = llm_summary.invoke([HumanMessage(content=narration_prompt)]).content
+            narrated    = safe_json_parse(result_text)
 
-            # Skill scores
-            raw_skill_scores = parsed.get("skill_scores", {})
-            skill_scores = {
-                k: max(0, min(100, int(v)))
-                for k, v in raw_skill_scores.items()
-            }
-
-            # Merge per-question verdicts back into question_scores
-            verdicts = {v["index"]: v["verdict"] for v in parsed.get("question_verdicts", [])}
-            for qs in question_scores:
-                qs["verdict"] = verdicts.get(qs["index"], "")
-
-            # Sanitize what_went_right / what_went_wrong
-            def clean_points(raw):
+            def clean_points(raw: Any) -> List[Dict[str, str]]:
                 if not isinstance(raw, list):
                     return []
                 return [
-                    {
-                        "point": str(item.get("point", "")),
-                        "tag":   str(item.get("tag", "General")),
-                    }
-                    for item in raw if isinstance(item, dict)
+                    {"point": str(item.get("point", "")), "tag": str(item.get("tag", "General"))}
+                    for item in raw if isinstance(item, dict) and item.get("point")
                 ]
 
+            what_went_right = clean_points(narrated.get("what_went_right", []))
+            what_went_wrong = clean_points(narrated.get("what_went_wrong", []))
+
             summary_payload = {
                 "role":             role,
                 "interview_type":   interview_type,
                 "candidate_name":   candidate_name,
                 "date_iso":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "duration_seconds": duration_seconds,
-                "overall_score":    max(0, min(100, int(parsed.get("overall_score", avg_score_100)))),
-                "recommendation":   parsed.get("recommendation", "Needs More Evaluation"),
-                "summary":          parsed.get("summary", ""),
-                "what_went_right":  clean_points(parsed.get("what_went_right", [])),
-                "what_went_wrong":  clean_points(parsed.get("what_went_wrong", [])),
-                # keep "weaknesses" alias so existing frontend doesn't break
-                "weaknesses":       [p["point"] for p in clean_points(parsed.get("what_went_wrong", []))],
-                "strengths":        [p["point"] for p in clean_points(parsed.get("what_went_right", []))],
-                "tips":             [t for t in parsed.get("tips", []) if isinstance(t, str)],
+                # ── Scores from deterministic step — LLM cannot touch these ──
+                "overall_score":    overall_100,
+                "recommendation":   recommendation,
                 "skill_scores":     skill_scores,
                 "question_scores":  question_scores,
+                # ── Narrated content from LLM step ───────────────────────────
+                "summary":          str(narrated.get("summary", "")),
+                "what_went_right":  what_went_right,
+                "what_went_wrong":  what_went_wrong,
+                "tips":             [str(t) for t in narrated.get("tips", []) if t],
+                # ── Backward-compat aliases ───────────────────────────────────
+                "strengths":        [p["point"] for p in what_went_right],
+                "weaknesses":       [p["point"] for p in what_went_wrong],
+                # ── Gap analysis (deterministic, always included) ─────────────
+                "gap_analysis": {
+                    "repeated_gaps":    facts["repeated_gaps"],
+                    "all_gaps":         facts["all_gaps"],
+                    "gap_frequency":    facts["gap_frequency"],
+                    "weak_dimensions":  facts["weak_dimensions"],
+                    "dim_averages":     facts["dim_averages"],
+                },
             }
 
-            if skill_scores and summary_payload["overall_score"] == 0:
-                summary_payload["overall_score"] = round(
-                    sum(skill_scores.values()) / len(skill_scores)
-                )
-
         except Exception as e:
-            print(f"[finalize] Parse error: {e}")
+            print(f"[finalize] LLM narration error: {e}")
+            # Fall back to deterministic-only summary — no LLM needed
             summary_payload = {
                 "role":             role,
                 "interview_type":   interview_type,
                 "candidate_name":   candidate_name,
                 "date_iso":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "duration_seconds": duration_seconds,
-                "overall_score":    avg_score_100,
-                "recommendation":   "Needs More Evaluation",
-                "summary":          f"Interview completed with an average score of {avg_score_10}/10.",
-                "what_went_right":  [],
-                "what_went_wrong":  [],
-                "weaknesses":       [],
-                "strengths":        [],
-                "tips":             [],
-                "skill_scores":     {},
+                "overall_score":    overall_100,
+                "recommendation":   recommendation,
+                "skill_scores":     skill_scores,
                 "question_scores":  question_scores,
+                "summary":          (
+                    f"Interview completed with a weighted score of {facts['weighted_avg']}/10. "
+                    f"Repeated gaps: {', '.join(facts['repeated_gaps']) or 'none identified'}."
+                ),
+                "what_went_right":  [{"point": s, "tag": "Core"} for s in facts["top_strengths"][:3]],
+                "what_went_wrong":  [{"point": w, "tag": "Gap"} for w in facts["top_weaknesses"][:3]],
+                "strengths":        facts["top_strengths"][:3],
+                "weaknesses":       facts["top_weaknesses"][:3],
+                "tips":             [],
+                "gap_analysis": {
+                    "repeated_gaps":   facts["repeated_gaps"],
+                    "all_gaps":        facts["all_gaps"],
+                    "gap_frequency":   facts["gap_frequency"],
+                    "weak_dimensions": facts["weak_dimensions"],
+                    "dim_averages":    facts["dim_averages"],
+                },
             }
 
+    # Persist summary to Redis (7 days)
     client.set(
         f"interview:{interview_id}:summary",
         json.dumps(summary_payload),
         ex=60 * 60 * 24 * 7,
     )
 
+    # Publish completion event
     publish_event(
         f"interview:{interview_id}:events",
         {"type": "interview_complete", "summary": summary_payload},
     )
 
+    # Store to Mem0 for future sessions
     try:
+        gap_str     = ", ".join(summary_payload.get("gap_analysis", {}).get("repeated_gaps", [])[:3]) or "none"
         memory_text = (
-            f"Interview for {role}: {summary_payload['summary']} "
-            f"Went well: {', '.join(p['point'] for p in summary_payload.get('what_went_right', []))}. "
-            f"Gaps: {', '.join(p['point'] for p in summary_payload.get('what_went_wrong', []))}. "
-            f"Score: {summary_payload['overall_score']}/100."
+            f"Interview for {role} ({interview_type}): "
+            f"Score {summary_payload['overall_score']}/100 — {recommendation}. "
+            f"Summary: {summary_payload['summary']} "
+            f"Repeated gaps: {gap_str}."
         )
         memory_client.add(memory_text, user_id=user_id)
     except Exception as e:
         print(f"[finalize] Mem0 store error: {e}")
 
-    print(f"[finalize] Done. Score: {summary_payload.get('overall_score')}/100")
+    print(f"[finalize] Done. Score={summary_payload.get('overall_score')}/100 | {recommendation}")
     return {"summary": summary_payload}

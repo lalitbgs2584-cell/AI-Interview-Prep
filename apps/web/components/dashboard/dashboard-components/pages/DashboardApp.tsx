@@ -1,5 +1,5 @@
 "use client"
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import OverviewPage from "../../OverviewPage";
 import ResumePage from "./ResumePage";
 import SkillsPage from "./SkillsPage";
@@ -35,12 +35,35 @@ const AI_TIP = {
 export default function DashboardApp({ user }: DashboardAppProps) {
   const [activePage, setActivePage] = useState<Page>("profile");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
+  const [streak, setStreak] = useState(0);
+  console.log("user isn dashboard app", user)
   // Derive display values from the nested user object
   const userName = user?.name ?? "Guest";
   const userRole = user?.role ?? "USER";
   const userAvatar = user?.avatar ?? null;
-  const streak = user?.streak ?? 0;
+
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch("/api/user/status", {
+          credentials: "include",
+        });
+
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => null);
+          throw new Error(errorData?.error || "Failed to fetch user status");
+        }
+
+        const data = await res.json();
+        setStreak(data.streak);
+      } catch (err) {
+        console.error("Fetch error:", err);
+      }
+    };
+
+    fetchStatus();
+  }, []);
+  console.log("user streak", streak)
   const initials = (userName).slice(0, 2).toUpperCase();
 
   // Derived stats for sidebar / overview
@@ -117,7 +140,7 @@ export default function DashboardApp({ user }: DashboardAppProps) {
           {activePage === "history" && <HistoryPage />}
 
           {/* ProfilePage receives the full user object — no prop spreading needed */}
-          {activePage === "profile" && <ProfilePage user={user} />}
+          {activePage === "profile" && <ProfilePage />}
         </main>
       </div>
     </>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 
 // ─────────────────────────────────────────────
 // Types derived directly from Prisma schema
@@ -12,13 +12,15 @@ type UserRole = "USER" | "ADMIN";
 
 interface Evaluation {
     overallScore?: number | null;
+    overallScore100?: number | null;  // ← 0-100 scale (PRIMARY)
     clarity?: number | null;
     technical?: number | null;
     confidence?: number | null;
     confidenceScore?: number | null;
     feedback?: string | null;
-    strengths?: string | null;
-    improvements?: string | null;
+    strengths?: string | string[] | null;
+    improvements?: string | string[] | null;
+    verdict?: string | null;
 }
 
 interface InterviewQuestion {
@@ -111,6 +113,21 @@ function scoreColor(n: number) {
     if (n >= 75) return "var(--positive)";
     if (n >= 50) return "var(--amber)";
     return "var(--rose)";
+}
+
+// ─────────────────────────────────────────────
+// Normalize evaluation scores (0-100 scale)
+// ─────────────────────────────────────────────
+function normalizeScore(ev: Evaluation | null | undefined): number {
+    if (!ev) return 0;
+    // Use overallScore100 (0-100) if available, otherwise convert overallScore (0-10)
+    if (ev.overallScore100 !== null && ev.overallScore100 !== undefined) {
+        return ev.overallScore100;
+    }
+    if (ev.overallScore !== null && ev.overallScore !== undefined) {
+        return ev.overallScore * 10; // Convert 0-10 to 0-100
+    }
+    return 0;
 }
 
 const TYPE_META: Record<InterviewType, { icon: string; label: string }> = {
@@ -225,7 +242,7 @@ function CardSection({ title, children }: { title: string; children: React.React
 
 // Interview history row
 function InterviewRow({ iv }: { iv: Interview }) {
-    const scores = iv.questions.map((q) => q.response?.evaluation?.overallScore);
+    const scores = iv.questions.map((q) => normalizeScore(q.response?.evaluation));
     const sessionScore = avg(scores);
     const meta = TYPE_META[iv.type];
     const completed = iv.status === "COMPLETED";
@@ -255,11 +272,12 @@ function InterviewRow({ iv }: { iv: Interview }) {
 
 // Score breakdown bars for a single interview
 function EvalBreakdown({ ev }: { ev: Evaluation }) {
+    const overallScore = normalizeScore(ev);
     const bars = [
-        { label: "Overall", val: ev.overallScore ?? 0 },
+        { label: "Overall", val: overallScore },
         { label: "Clarity", val: ev.clarity ?? 0 },
         { label: "Technical", val: ev.technical ?? 0 },
-        { label: "Confidence", val: ev.confidence ?? 0 },
+        { label: "Confidence", val: Math.round((ev.confidence ?? 0) * 10) }, // Convert 0-1.0 to 0-100 if needed
     ];
     return (
         <div className="skill-list" style={{ gap: "0.65rem" }}>
@@ -267,10 +285,10 @@ function EvalBreakdown({ ev }: { ev: Evaluation }) {
                 <div className="skill-row" key={b.label}>
                     <div className="skill-row-top">
                         <span className="skill-name">{b.label}</span>
-                        <span className={`skill-score ${scoreClass(b.val)}`}>{b.val}/100</span>
+                        <span className={`skill-score ${scoreClass(b.val)}`}>{Math.round(b.val)}/100</span>
                     </div>
                     <div className="bar-track">
-                        <div className={`bar-fill ${scoreClass(b.val)}`} style={{ width: `${b.val}%` }} />
+                        <div className={`bar-fill ${scoreClass(b.val)}`} style={{ width: `${Math.round(b.val)}%` }} />
                     </div>
                 </div>
             ))}
@@ -279,16 +297,159 @@ function EvalBreakdown({ ev }: { ev: Evaluation }) {
 }
 
 // ─────────────────────────────────────────────
+// Loading & Error states
+// ─────────────────────────────────────────────
+function LoadingState() {
+    return (
+        <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: "100vh",
+            fontSize: "1rem",
+            color: "var(--text-2)",
+        }}>
+            ⏳ Loading profile...
+        </div>
+    );
+}
+
+function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) {
+    return (
+        <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            height: "100vh",
+            flexDirection: "column",
+            gap: "1rem",
+        }}>
+            <div style={{ color: "var(--rose)", fontSize: "1rem" }}>
+                ⚠️ Error: {error}
+            </div>
+            <button
+                onClick={onRetry}
+                style={{
+                    padding: "0.5rem 1rem",
+                    background: "var(--accent)",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "var(--r-md)",
+                    cursor: "pointer",
+                }}
+            >
+                Retry
+            </button>
+        </div>
+    );
+}
+
+// ─────────────────────────────────────────────
 // Main component
 // ─────────────────────────────────────────────
-export default function ProfilePage({ user }: ProfilePageProps) {
+export default function ProfilePage() {
+    // ⚠️ ALL HOOKS MUST BE AT THE TOP - BEFORE ANY CONDITIONALS
     const [activeTab, setActiveTab] = useState<"overview" | "interviews" | "resume" | "skills">("overview");
+    const [profileData, setProfileData] = useState<ProfilePageProps["user"] | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [viewDate, setViewDate] = useState(() => {
+        const d = new Date(); 
+        return { y: d.getFullYear(), m: d.getMonth() };
+    });
 
+    // Fetch profile data on mount
+    useEffect(() => {
+        const fetchProfile = async () => {
+            try {
+                setIsLoading(true);
+                const response = await fetch("/api/user/profile");
+
+                if (!response.ok) {
+                    throw new Error(`Failed to load profile: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                setProfileData(data.user);
+                setError(null);
+            } catch (err) {
+                setError(err instanceof Error ? err.message : "Failed to load profile");
+                console.error("Profile fetch error:", err);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        fetchProfile();
+    }, []);
+
+    // Retry function
+    const handleRetry = () => {
+        setIsLoading(true);
+        setError(null);
+        const fetchProfile = async () => {
+            try {
+                const response = await fetch("/api/user/profile");
+                if (!response.ok) throw new Error("Failed to load profile");
+                const data = await response.json();
+                setProfileData(data.user);
+            } catch (err) {
+                setError(err instanceof Error ? err.message : "Failed to load profile");
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        fetchProfile();
+    };
+
+    // ⚠️ MEMOS MUST BE HERE - UNCONDITIONALLY
+    // Use empty defaults if profileData is null to avoid hook issues
+    const user = profileData || {};
     const {
-        name, avatar, email, role, createdAt,
-        streak = 0, bestStreak = 0, lastLoginAt,
-        activityMap = {}, skills = [], interviews = [], resumes = [],
+        name = null,
+        avatar = null,
+        email = null,
+        role = null,
+        createdAt = null,
+        streak = 0,
+        bestStreak = 0,
+        lastLoginAt = null,
+        activityMap = {},
+        skills = [],
+        interviews = [],
+        resumes = [],
     } = user;
+
+    // These memos will always execute, even if data is loading/error
+    const heatmapWeeks = useMemo(() => buildHeatmap(activityMap), [activityMap]);
+    const monthLabels = useMemo(() => buildMonthLabels(heatmapWeeks), [heatmapWeeks]);
+    const weekDays = useMemo(() => buildWeekDays(activityMap), [activityMap]);
+
+    const recentDays = useMemo(() => {
+        const today = new Date(); 
+        today.setHours(0, 0, 0, 0);
+        return Array.from({ length: 7 }, (_, i) => {
+            const d = new Date(today); 
+            d.setDate(today.getDate() - i);
+            const iso = d.toISOString().slice(0, 10);
+            return { iso, count: activityMap[iso] ?? 0, isToday: i === 0 };
+        }).filter((x) => x.count > 0);
+    }, [activityMap]);
+
+    const skillsByCategory = useMemo(() => {
+        const map: Record<string, string[]> = {};
+        skills.forEach(({ skill }) => {
+            const cat = skill.category ?? "Other";
+            if (!map[cat]) map[cat] = [];
+            map[cat]!.push(skill.name);
+        });
+        return map;
+    }, [skills]);
+
+    // Now we can have early returns
+    if (isLoading) return <LoadingState />;
+    if (error) return <ErrorState error={error} onRetry={handleRetry} />;
+    if (!profileData) return <ErrorState error="No profile data available" onRetry={handleRetry} />;
 
     const initials = (name ?? "G").slice(0, 2).toUpperCase();
     const resume = resumes[0];
@@ -299,8 +460,9 @@ export default function ProfilePage({ user }: ProfilePageProps) {
     const totalInterviews = interviews.length;
     const completedCount = completedIVs.length;
 
+    // Use normalized scores (0-100 scale)
     const allScores = completedIVs.flatMap((iv) =>
-        iv.questions.map((q) => q.response?.evaluation?.overallScore)
+        iv.questions.map((q) => normalizeScore(q.response?.evaluation))
     );
     const avgScore = avg(allScores);
 
@@ -309,7 +471,7 @@ export default function ProfilePage({ user }: ProfilePageProps) {
     );
     const avgClarity = avg(allEvals.map((e) => e.clarity));
     const avgTechnical = avg(allEvals.map((e) => e.technical));
-    const avgConfidence = avg(allEvals.map((e) => e.confidence));
+    const avgConfidence = avg(allEvals.map((e) => (e.confidence ?? 0) * 10)); // Convert to 0-100 scale
 
     // Type distribution
     const byType = interviews.reduce((acc, iv) => {
@@ -325,34 +487,6 @@ export default function ProfilePage({ user }: ProfilePageProps) {
     }, {} as Record<Difficulty, number>);
 
     const level = getLevel(completedCount);
-    const heatmapWeeks = useMemo(() => buildHeatmap(activityMap), [activityMap]);
-    const monthLabels = useMemo(() => buildMonthLabels(heatmapWeeks), [heatmapWeeks]);
-    const weekDays = useMemo(() => buildWeekDays(activityMap), [activityMap]);
-
-    // Recent activity from activityMap
-    const recentDays = useMemo(() => {
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        return Array.from({ length: 7 }, (_, i) => {
-            const d = new Date(today); d.setDate(today.getDate() - i);
-            const iso = d.toISOString().slice(0, 10);
-            return { iso, count: activityMap[iso] ?? 0, isToday: i === 0 };
-        }).filter((x) => x.count > 0);
-    }, [activityMap]);
-
-    // Skill categories grouping
-    const skillsByCategory = useMemo(() => {
-        const map: Record<string, string[]> = {};
-        skills.forEach(({ skill }) => {
-            const cat = skill.category ?? "Other";
-            if (!map[cat]) map[cat] = [];
-            map[cat]!.push(skill.name);
-        });
-        return map;
-    }, [skills]);
-
-    const tabs = [
-        { id: "overview" as const, label: "Overview", icon: "📊" },
-    ];
 
     return (
         <div className="profile-full-page">
@@ -418,7 +552,6 @@ export default function ProfilePage({ user }: ProfilePageProps) {
                         </CardSection>
 
                         {/* Streak */}
-                        {/* ── Streak card ── */}
                         <CardSection title="Streak">
                             {/* Header row */}
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
@@ -536,10 +669,10 @@ export default function ProfilePage({ user }: ProfilePageProps) {
                                         <div className="skill-row" key={b.label}>
                                             <div className="skill-row-top">
                                                 <span className="skill-name">{b.label}</span>
-                                                <span className={`skill-score ${scoreClass(b.val)}`}>{b.val}/100</span>
+                                                <span className={`skill-score ${scoreClass(b.val)}`}>{Math.round(b.val)}/100</span>
                                             </div>
                                             <div className="bar-track">
-                                                <div className={`bar-fill ${scoreClass(b.val)}`} style={{ width: `${b.val}%` }} />
+                                                <div className={`bar-fill ${scoreClass(b.val)}`} style={{ width: `${Math.round(b.val)}%` }} />
                                             </div>
                                         </div>
                                     ))}
@@ -551,14 +684,8 @@ export default function ProfilePage({ user }: ProfilePageProps) {
                     {/* RIGHT COL */}
                     <div className="profile-col">
                         {/* Activity heatmap */}
-                        {/* ── Activity Calendar ── */}
                         <CardSection title="Activity">
-                            {/* Month navigation */}
                             {(() => {
-                                const [viewDate, setViewDate] = useState(() => {
-                                    const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() };
-                                });
-
                                 const today = new Date(); today.setHours(0, 0, 0, 0);
                                 const todayIso = today.toISOString().slice(0, 10);
                                 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -830,10 +957,10 @@ export default function ProfilePage({ user }: ProfilePageProps) {
                             const latest = [...completedIVs].sort((a, b) => new Date(b.completedAt ?? b.createdAt).getTime() - new Date(a.completedAt ?? a.createdAt).getTime())[0]!;
                             const latestEvals = latest.questions.flatMap((q) => q.response?.evaluation ? [q.response.evaluation] : []);
                             const merged: Evaluation = {
-                                overallScore: avg(latestEvals.map((e) => e.overallScore)),
+                                overallScore100: avg(latestEvals.map((e) => normalizeScore(e))),
                                 clarity: avg(latestEvals.map((e) => e.clarity)),
                                 technical: avg(latestEvals.map((e) => e.technical)),
-                                confidence: avg(latestEvals.map((e) => e.confidence)),
+                                confidence: avg(latestEvals.map((e) => (e.confidence ?? 0) * 10)),
                             };
                             return (
                                 <CardSection title={`Latest: ${latest.title}`}>
@@ -845,13 +972,13 @@ export default function ProfilePage({ user }: ProfilePageProps) {
                                         </div>
                                     )}
                                     {latestEvals[0]?.strengths && (
-                                        <div style={{ padding: "0.75rem 1rem", background: "rgba(226,168,75,0.06)", border: "1px solid rgba(226,168,75,0.18)", borderRadius: "var(--r-md)", fontSize: "0.82rem", color: "var(--positive)", lineHeight: 1.6 }}>
-                                            <strong>💪 Strengths:</strong> {latestEvals[0].strengths}
+                                        <div style={{ marginTop: "0.75rem", padding: "0.75rem 1rem", background: "rgba(226,168,75,0.06)", border: "1px solid rgba(226,168,75,0.18)", borderRadius: "var(--r-md)", fontSize: "0.82rem", color: "var(--positive)", lineHeight: 1.6 }}>
+                                            <strong>💪 Strengths:</strong> {Array.isArray(latestEvals[0].strengths) ? latestEvals[0].strengths.join(", ") : latestEvals[0].strengths}
                                         </div>
                                     )}
                                     {latestEvals[0]?.improvements && (
-                                        <div style={{ padding: "0.75rem 1rem", background: "rgba(255,77,109,0.06)", border: "1px solid rgba(255,77,109,0.18)", borderRadius: "var(--r-md)", fontSize: "0.82rem", color: "var(--rose)", lineHeight: 1.6 }}>
-                                            <strong>🎯 Improve:</strong> {latestEvals[0].improvements}
+                                        <div style={{ marginTop: "0.75rem", padding: "0.75rem 1rem", background: "rgba(255,77,109,0.06)", border: "1px solid rgba(255,77,109,0.18)", borderRadius: "var(--r-md)", fontSize: "0.82rem", color: "var(--rose)", lineHeight: 1.6 }}>
+                                            <strong>🎯 Improve:</strong> {Array.isArray(latestEvals[0].improvements) ? latestEvals[0].improvements.join(", ") : latestEvals[0].improvements}
                                         </div>
                                     )}
                                 </CardSection>
@@ -866,7 +993,8 @@ export default function ProfilePage({ user }: ProfilePageProps) {
                                         .sort((a, b) => new Date(a.completedAt ?? a.createdAt).getTime() - new Date(b.completedAt ?? b.createdAt).getTime())
                                         .slice(-12)
                                         .map((iv, i) => {
-                                            const s = avg(iv.questions.map((q) => q.response?.evaluation?.overallScore));
+                                            const scores = iv.questions.map((q) => normalizeScore(q.response?.evaluation));
+                                            const s = avg(scores);
                                             const h = s ? Math.max((s / 100) * 72, 6) : 6;
                                             return (
                                                 <div key={i} title={`${iv.title}: ${s}`} style={{

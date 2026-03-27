@@ -1,47 +1,115 @@
 "use client";
 import { authClient } from "@repo/auth/client";
 import { redirect } from "next/navigation";
-import React, { useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import CustomSessionModal from "./dashboard-components/pages/CustomSessionModal";
 
-const stats = [
-  { label: "Sessions Done", value: "24", unit: "total", dot: "dot-accent", delta: "+3 this week" },
-  { label: "Avg. Score", value: "78", unit: "/ 100", dot: "dot-gold", delta: "+6 vs last week" },
-  { label: "Skills Covered", value: "12", unit: "topics", dot: "dot-violet", delta: "4 remaining" },
-  { label: "Current Streak", value: "7", unit: "days 🔥", dot: "dot-accent", delta: "Personal best!" },
-];
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
 
-const recentSessions = [
-  { id: 1, title: "System Design: URL Shortener", type: "System Design", score: 84, date: "Today, 2:30 PM", duration: "42 min", status: "high" },
-  { id: 2, title: "Behavioral: Leadership & Conflict", type: "Behavioral", score: 71, date: "Yesterday", duration: "28 min", status: "medium" },
-  { id: 3, title: "DSA: Trees & Graph Traversal", type: "Coding", score: 62, date: "2 days ago", duration: "55 min", status: "low" },
-  { id: 4, title: "System Design: Rate Limiter", type: "System Design", score: 89, date: "3 days ago", duration: "38 min", status: "high" },
-];
+interface DashboardStats {
+  totalSessions: number;
+  averageScore: number;
+  skillsCovered: number;
+  currentStreak: number;
+  weeklySessionDelta: number;
+  scoreImprovement: number;
+  skillsRemaining: number;
+}
 
-const skillRadar = [
-  { skill: "System Design", score: 84 },
-  { skill: "Data Structures", score: 68 },
-  { skill: "Behavioral", score: 75 },
-  { skill: "SQL & Databases", score: 55 },
-  { skill: "OS Concepts", score: 48 },
-  { skill: "Networking", score: 61 },
-];
+interface SessionData {
+  id: string;
+  title: string;
+  type: "TECHNICAL" | "HR" | "SYSTEM_DESIGN" | "BEHAVIORAL";
+  score: number;
+  date: Date;
+  duration: number; // in minutes
+  status: "high" | "medium" | "low";
+}
 
-const quickStart = [
-  { id: "sd", icon: "⬡", label: "System Design", desc: "Architecture & scalability", tag: "Popular", tagClass: "tag-accent" },
-  { id: "dsa", icon: "◈", label: "DSA / Coding", desc: "Algorithms & data structures", tag: "Daily", tagClass: "tag-gold" },
-  { id: "beh", icon: "◎", label: "Behavioral", desc: "STAR method coaching", tag: "Suggested", tagClass: "tag-violet" },
-  { id: "sql", icon: "⬕", label: "SQL & Databases", desc: "Queries, indexes, design", tag: "Weak area", tagClass: "tag-rose" },
-];
+interface SkillData {
+  skill: string;
+  score: number;
+  category?: string;
+}
+
+interface QuickStartItem {
+  id: string;
+  icon: string;
+  label: string;
+  desc: string;
+  tag: string;
+  tagClass: string;
+  type: "TECHNICAL" | "HR" | "SYSTEM_DESIGN" | "BEHAVIORAL";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Utility Functions
+// ─────────────────────────────────────────────────────────────────────────────
 
 function scoreClass(status: string) {
   return status === "high" ? "score-high" : status === "medium" ? "score-medium" : "score-low";
 }
+
 function barClass(status: string) {
   return `bar-fill ${scoreClass(status)}`;
 }
 
-export function SessionRow({ s }: { s: typeof recentSessions[0] }) {
+function getStatusFromScore(score: number): "high" | "medium" | "low" {
+  return score >= 75 ? "high" : score >= 60 ? "medium" : "low";
+}
+
+function formatDuration(minutes: number): string {
+  return `${minutes} min`;
+}
+
+function formatDate(date: Date): string {
+  const now = new Date();
+  const diffMs = now.getTime() - new Date(date).getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays} days ago`;
+  return new Date(date).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function getTypeColor(type: string): string {
+  switch (type) {
+    case "SYSTEM_DESIGN":
+      return "tag-accent";
+    case "BEHAVIORAL":
+      return "tag-violet";
+    case "TECHNICAL":
+      return "tag-sky";
+    case "HR":
+      return "tag-gold";
+    default:
+      return "tag-sky";
+  }
+}
+
+function getTypeLabel(type: string): string {
+  switch (type) {
+    case "SYSTEM_DESIGN":
+      return "System Design";
+    case "BEHAVIORAL":
+      return "Behavioral";
+    case "TECHNICAL":
+      return "Coding";
+    case "HR":
+      return "HR";
+    default:
+      return type;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Components
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function SessionRow({ s }: { s: SessionData }) {
   return (
     <div className="session-row">
       <div className="session-row-left">
@@ -49,11 +117,11 @@ export function SessionRow({ s }: { s: typeof recentSessions[0] }) {
         <div>
           <div className="session-title">{s.title}</div>
           <div className="session-meta">
-            <span className={`tag ${s.type === "System Design" ? "tag-accent" : s.type === "Behavioral" ? "tag-violet" : "tag-sky"}`}>
-              {s.type}
+            <span className={`tag ${getTypeColor(s.type)}`}>
+              {getTypeLabel(s.type)}
             </span>
-            <span className="session-date">{s.date}</span>
-            <span className="session-duration">· {s.duration}</span>
+            <span className="session-date">{formatDate(s.date)}</span>
+            <span className="session-duration">· {formatDuration(s.duration)}</span>
           </div>
         </div>
       </div>
@@ -62,36 +130,200 @@ export function SessionRow({ s }: { s: typeof recentSessions[0] }) {
   );
 }
 
-export default function OverviewPage({ userName, streak, onNavigate }: {
+function LoadingSkeleton() {
+  return (
+    <div className="loading-container">
+      <div className="skeleton-stat"></div>
+      <div className="skeleton-stat"></div>
+      <div className="skeleton-stat"></div>
+      <div className="skeleton-stat"></div>
+    </div>
+  );
+}
+
+function ErrorMessage({ message }: { message: string }) {
+  return (
+    <div className="error-message">
+      <span>⚠️ {message}</span>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Component
+// ─────────────────────────────────────────────────────────────────────────────
+
+export default function OverviewPage({
+  userName,
+  streak,
+  onNavigate,
+}: {
   userName: string;
   streak: number;
   onNavigate: (page: string) => void;
 }) {
-    const [modalOpen, setModalOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"overview" | "sessions" | "skills">("overview");
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  // ─ State for dynamic data
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [recentSessions, setRecentSessions] = useState<SessionData[]>([]);
+  const [skillData, setSkillData] = useState<SkillData[]>([]);
+  const [quickStart, setQuickStart] = useState<QuickStartItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   const now = new Date();
-  const dateStr = now.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
-  const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const dateStr = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Fetch Dashboard Data
+  // ─────────────────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      try {
+        setIsLoading(true);
+        setError(null);
+
+        // Fetch all dashboard data in parallel
+        const [statsRes, sessionsRes, skillsRes] = await Promise.all([
+          fetch("/api/dashboard/stats"),
+          fetch("/api/dashboard/sessions"),
+          fetch("/api/dashboard/skills"),
+        ]);
+
+        if (!statsRes.ok || !sessionsRes.ok || !skillsRes.ok) {
+          throw new Error("Failed to fetch dashboard data");
+        }
+
+        const statsData = await statsRes.json();
+        const sessionsData = await sessionsRes.json();
+        const skillsData = await skillsRes.json();
+
+        setStats(statsData);
+        setRecentSessions(sessionsData.interviews || []);
+        setSkillData(skillsData.skills || []);
+
+        // Generate quick start items dynamically
+        const quickStartItems: QuickStartItem[] = [
+          {
+            id: "sd",
+            icon: "⬡",
+            label: "System Design",
+            desc: "Architecture & scalability",
+            tag: "Popular",
+            tagClass: "tag-accent",
+            type: "SYSTEM_DESIGN",
+          },
+          {
+            id: "dsa",
+            icon: "◈",
+            label: "Technical",
+            desc: "Algorithms & data structures",
+            tag: "Daily",
+            tagClass: "tag-gold",
+            type: "TECHNICAL",
+          },
+          {
+            id: "beh",
+            icon: "◎",
+            label: "Behavioral",
+            desc: "STAR method coaching",
+            tag: "Suggested",
+            tagClass: "tag-violet",
+            type: "BEHAVIORAL",
+          },
+          {
+            id: "hr",
+            icon: "⬕",
+            label: "HR Round",
+            desc: "Communication & culture fit",
+            tag: "Essential",
+            tagClass: "tag-rose",
+            type: "HR",
+          },
+        ];
+        setQuickStart(quickStartItems);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "An error occurred");
+        console.error("Dashboard fetch error:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchDashboardData();
+  }, []);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Handle Logout
+  // ─────────────────────────────────────────────────────────────────────────
 
   const handleLogout = async () => {
-    setIsLoggingOut(true)
-    await authClient.signOut()
-    redirect("/login")
+    setIsLoggingOut(true);
+    await authClient.signOut();
+    redirect("/login");
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────
+
+  if (isLoading) {
+    return <LoadingSkeleton />;
   }
 
-  
+  const displayStats = stats ? [
+    {
+      label: "Sessions Done",
+      value: stats.totalSessions.toString(),
+      unit: "total",
+      dot: "dot-accent",
+      delta: `+${stats.weeklySessionDelta} this week`,
+    },
+    {
+      label: "Avg. Score",
+      value: stats.averageScore.toString(),
+      unit: "/ 100",
+      dot: "dot-gold",
+      delta: `+${stats.scoreImprovement} vs last week`,
+    },
+    {
+      label: "Skills Covered",
+      value: stats.skillsCovered.toString(),
+      unit: "topics",
+      dot: "dot-violet",
+      delta: `${stats.skillsRemaining} remaining`,
+    },
+    {
+      label: "Current Streak",
+      value: streak.toString(),
+      unit: "days 🔥",
+      dot: "dot-accent",
+      delta: "Keep it up!",
+    },
+  ] : [];
+
   return (
     <>
       {/* ── Top bar ── */}
       <div className="dash-topbar">
         <div>
           <div className="dash-greeting">
-            Good {now.getHours() < 12 ? "morning" : now.getHours() < 17 ? "afternoon" : "evening"}, <em>{userName}</em> 
+            Good {now.getHours() < 12 ? "morning" : now.getHours() < 17 ? "afternoon" : "evening"},{" "}
+            <em>{userName}</em>
           </div>
-          <div className="dash-date">{dateStr} · {streak}-day streak 🔥</div>
+          <div className="dash-date">
+            {dateStr} · {streak}-day streak 🔥
+          </div>
         </div>
         <div className="topbar-actions">
-          
           <button
             onClick={handleLogout}
             disabled={isLoggingOut}
@@ -102,15 +334,21 @@ export default function OverviewPage({ userName, streak, onNavigate }: {
         </div>
       </div>
 
+      {/* ── Error State ── */}
+      {error && <ErrorMessage message={error} />}
+
       {/* ── Stat cards ── */}
       <div className="stats-grid">
-        {stats.map((s, i) => (
+        {displayStats.map((s, i) => (
           <div key={s.label} className={`dash-stat-card anim-${i}`}>
             <div className="dash-stat-top">
               <span className={`stat-card-dot ${s.dot}`} />
               <span className="dash-stat-label">{s.label}</span>
             </div>
-            <div className="dash-stat-value">{s.value}<span className="dash-stat-unit">{s.unit}</span></div>
+            <div className="dash-stat-value">
+              {s.value}
+              <span className="dash-stat-unit">{s.unit}</span>
+            </div>
             <div className="dash-stat-delta">{s.delta}</div>
           </div>
         ))}
@@ -119,7 +357,11 @@ export default function OverviewPage({ userName, streak, onNavigate }: {
       {/* ── Tabs ── */}
       <div className="dash-tabs">
         {(["overview", "sessions", "skills"] as const).map((t) => (
-          <button key={t} className={`dash-tab ${activeTab === t ? "active" : ""}`} onClick={() => setActiveTab(t)}>
+          <button
+            key={t}
+            className={`dash-tab ${activeTab === t ? "active" : ""}`}
+            onClick={() => setActiveTab(t)}
+          >
             {t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
@@ -131,11 +373,21 @@ export default function OverviewPage({ userName, streak, onNavigate }: {
           <div className="overview-grid">
             <div className="panel">
               <div className="panel-header">
-                <div><div className="panel-title">Start a Session</div><div className="panel-sub">Pick a category to begin</div></div>
+                <div>
+                  <div className="panel-title">Start a Session</div>
+                  <div className="panel-sub">Pick a category to begin</div>
+                </div>
               </div>
               <div className="quick-grid">
                 {quickStart.map((q) => (
-                  <button key={q.id} className="quick-card">
+                  <button
+                    key={q.id}
+                    className="quick-card"
+                    onClick={() => {
+                      // TODO: Route to interview creation with type
+                      onNavigate(`interview?type=${q.type}`);
+                    }}
+                  >
                     <div className="quick-card-top">
                       <span className="quick-icon">{q.icon}</span>
                       <span className={`tag ${q.tagClass}`}>{q.tag}</span>
@@ -148,21 +400,30 @@ export default function OverviewPage({ userName, streak, onNavigate }: {
             </div>
             <div className="panel">
               <div className="panel-header">
-                <div><div className="panel-title">Skill Snapshot</div><div className="panel-sub">Based on last 10 sessions</div></div>
+                <div>
+                  <div className="panel-title">Skill Snapshot</div>
+                  <div className="panel-sub">Based on last 10 sessions</div>
+                </div>
               </div>
               <div className="skill-list">
-                {skillRadar.map((s, i) => {
-                  const st = s.score >= 75 ? "high" : s.score >= 60 ? "medium" : "low";
-                  return (
-                    <div key={s.skill} className="skill-row" style={{ animationDelay: `${i * 0.06}s` }}>
-                      <div className="skill-row-top">
-                        <span className="skill-name">{s.skill}</span>
-                        <span className={`skill-score ${scoreClass(st)}`}>{s.score}</span>
+                {skillData.length > 0 ? (
+                  skillData.slice(0, 6).map((s, i) => {
+                    const st = getStatusFromScore(s.score);
+                    return (
+                      <div key={s.skill} className="skill-row" style={{ animationDelay: `${i * 0.06}s` }}>
+                        <div className="skill-row-top">
+                          <span className="skill-name">{s.skill}</span>
+                          <span className={`skill-score ${scoreClass(st)}`}>{s.score}</span>
+                        </div>
+                        <div className="bar-track">
+                          <div className={barClass(st)} style={{ width: `${s.score}%` }} />
+                        </div>
                       </div>
-                      <div className="bar-track"><div className={barClass(st)} style={{ width: `${s.score}%` }} /></div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                ) : (
+                  <p className="text-gray-400">No skill data available yet</p>
+                )}
               </div>
             </div>
           </div>
@@ -174,10 +435,17 @@ export default function OverviewPage({ userName, streak, onNavigate }: {
         <div className="tab-content">
           <div className="panel">
             <div className="panel-header">
-              <div><div className="panel-title">All Sessions</div><div className="panel-sub">{recentSessions.length} total</div></div>
+              <div>
+                <div className="panel-title">All Sessions</div>
+                <div className="panel-sub">{recentSessions.length} total</div>
+              </div>
             </div>
             <div className="session-list">
-              {recentSessions.map((s) => <SessionRow key={s.id} s={s} />)}
+              {recentSessions.length > 0 ? (
+                recentSessions.map((s) => <SessionRow key={s.id} s={s} />)
+              ) : (
+                <p className="text-gray-400">No sessions yet. Start your first interview!</p>
+              )}
             </div>
           </div>
         </div>
@@ -188,33 +456,48 @@ export default function OverviewPage({ userName, streak, onNavigate }: {
         <div className="tab-content">
           <div className="panel">
             <div className="panel-header">
-              <div><div className="panel-title">Skill Breakdown</div><div className="panel-sub">Detailed scores across all topics</div></div>
+              <div>
+                <div className="panel-title">Skill Breakdown</div>
+                <div className="panel-sub">Detailed scores across all topics</div>
+              </div>
             </div>
             <div className="skill-list skill-list-lg">
-              {skillRadar.map((s, i) => {
-                const st = s.score >= 75 ? "high" : s.score >= 60 ? "medium" : "low";
-                return (
-                  <div key={s.skill} className="skill-row" style={{ animationDelay: `${i * 0.07}s` }}>
-                    <div className="skill-row-top">
-                      <span className="skill-name">{s.skill}</span>
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                        <span className={`tag ${st === "high" ? "tag-gold" : st === "medium" ? "tag-amber" : "tag-rose"}`}>
-                          {st === "high" ? "Strong" : st === "medium" ? "Good" : "Needs work"}
-                        </span>
-                        <span className={`skill-score ${scoreClass(st)}`}>{s.score}/100</span>
+              {skillData.length > 0 ? (
+                skillData.map((s, i) => {
+                  const st = getStatusFromScore(s.score);
+                  const statusLabel = st === "high" ? "Strong" : st === "medium" ? "Good" : "Needs work";
+                  const statusTag = st === "high" ? "tag-gold" : st === "medium" ? "tag-amber" : "tag-rose";
+                  const hint =
+                    st === "low"
+                      ? "🎯 Recommended: 2 sessions this week"
+                      : st === "medium"
+                        ? "📈 Keep practicing to reach Strong"
+                        : "✅ Great performance — maintain with 1 session/week";
+
+                  return (
+                    <div key={s.skill} className="skill-row" style={{ animationDelay: `${i * 0.07}s` }}>
+                      <div className="skill-row-top">
+                        <span className="skill-name">{s.skill}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                          <span className={`tag ${statusTag}`}>{statusLabel}</span>
+                          <span className={`skill-score ${scoreClass(st)}`}>{s.score}/100</span>
+                        </div>
                       </div>
+                      <div className="bar-track bar-track-lg">
+                        <div className={barClass(st)} style={{ width: `${s.score}%` }} />
+                      </div>
+                      <div className="skill-hint">{hint}</div>
                     </div>
-                    <div className="bar-track bar-track-lg"><div className={barClass(st)} style={{ width: `${s.score}%` }} /></div>
-                    <div className="skill-hint">
-                      {st === "low" ? "🎯 Recommended: 2 sessions this week" : st === "medium" ? "📈 Keep practicing to reach Strong" : "✅ Great performance — maintain with 1 session/week"}
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              ) : (
+                <p className="text-gray-400">No skill data available yet. Complete interviews to see your skill breakdown!</p>
+              )}
             </div>
           </div>
         </div>
       )}
+
       <CustomSessionModal isOpen={modalOpen} onClose={() => setModalOpen(false)} />
     </>
   );
