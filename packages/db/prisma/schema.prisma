@@ -19,18 +19,18 @@ model User {
   accounts      Account[]
 
   // Resume
-  isResumeUploaded Boolean   @default(false)
+  isResumeUploaded Boolean    @default(false)
   // Soft delete
-  isDeleted        Boolean   @default(false)
-  isBlocked        Boolean   @default(false)
-  isBlockedReason  String    @default("")
-  isBlockedAt      DateTime?  
-  streak           Int       @default(0) // current login streak (days)
-  bestStreak       Int       @default(0) // all-time best streak
+  isDeleted        Boolean    @default(false)
+  isBlocked        Boolean    @default(false)
+  isBlockedReason  String     @default("")
+  isBlockedAt      DateTime?
+  streak           Int        @default(0) // current login streak (days)
+  bestStreak       Int        @default(0) // all-time best streak
   lastLoginAt      DateTime? // track for streak logic
-  activityMap      Json      @default("{}") // ISO-date → session count map
-  role             UserRole  @default(USER)
-  gapReport       GapReport?
+  activityMap      Json       @default("{}") // ISO-date → session count map
+  role             UserRole   @default(USER)
+  gapReport        GapReport?
 
   interviews Interview[]
   skills     UserSkill[]
@@ -151,8 +151,6 @@ model UserSkill {
   @@map("user_skill")
 }
 
-
-
 // INTERVIEWS
 
 model Interview {
@@ -163,24 +161,26 @@ model Interview {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  videoUrl String?
-  status   InterviewStatus @default(CREATED)
-  type     InterviewType   @default(TECHNICAL)
+  videoUrl           String?
+  status             InterviewStatus @default(CREATED)
+  type               InterviewType   @default(TECHNICAL)
+  endReason          String?
+  interruptionCount  Int?
+  tabSwitches        Int             @default(0)
+  fsExits            Int             @default(0)
+  sessionDurationSec Int             @default(0)
 
   questions InterviewQuestion[]
 
-  summary InterviewSummary?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  summary     InterviewSummary?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
   completedAt DateTime?
 
   @@index([userId])
   @@index([status])
   @@map("interview")
 }
-
-
-
 
 model File {
   id String @id @default(uuid())
@@ -335,11 +335,11 @@ model InterviewSummary {
   interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
 
   // ── Deterministic scores ──────────────────────────────────────────────────
-  overallScore    Int     @default(0)   // 0–100, difficulty-weighted
-  plainAvg        Float   @default(0)   // simple 0–10 average
-  weightedAvg     Float   @default(0)   // difficulty-weighted 0–10 average
-  recommendation  String  @default("Needs More Evaluation")
-  durationSeconds Int     @default(0)
+  overallScore    Int    @default(0) // 0–100, difficulty-weighted
+  plainAvg        Float  @default(0) // simple 0–10 average
+  weightedAvg     Float  @default(0) // difficulty-weighted 0–10 average
+  recommendation  String @default("Needs More Evaluation")
+  durationSeconds Int    @default(0)
 
   // ── LLM-narrated content ──────────────────────────────────────────────────
   summary String?
@@ -376,7 +376,7 @@ model Question {
   type       InterviewType?
 
   // NEW — expected answer metadata for comparative evaluation
-  expectedAnswer Json?  // { key_concepts[], reasoning_steps[], ideal_structure, common_mistakes[] }
+  expectedAnswer Json? // { key_concepts[], reasoning_steps[], ideal_structure, common_mistakes[] }
 
   interviews InterviewQuestion[]
 
@@ -387,7 +387,6 @@ model Question {
   @@index([type])
   @@map("question")
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. REPLACE the existing InterviewQuestion model
@@ -406,11 +405,11 @@ model InterviewQuestion {
 
   response Response?
 
-  order      Int?
-  score      Int?
+  order Int?
+  score Int?
 
   // NEW — snapshot of the expected answer used during this interview session
-  expectedAnswer Json?  // { key_concepts[], reasoning_steps[], ideal_structure, common_mistakes[] }
+  expectedAnswer Json? // { key_concepts[], reasoning_steps[], ideal_structure, common_mistakes[] }
 
   createdAt DateTime @default(now())
 
@@ -419,7 +418,6 @@ model InterviewQuestion {
   @@index([questionId])
   @@map("interview_question")
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. REPLACE the existing Response model
@@ -445,7 +443,6 @@ model Response {
   @@map("response")
 }
 
-
 model Evaluation {
   id String @id @default(uuid())
 
@@ -453,9 +450,9 @@ model Evaluation {
   response   Response @relation(fields: [responseId], references: [id], onDelete: Cascade)
 
   // ── Scores ────────────────────────────────────────────────────────────────
-  overallScore    Int?    // 0–10 (difficulty-capped)
-  overallScore100 Int?    // 0–100 convenience field (overallScore * 10)
-  confidence      Float?  // LLM confidence 0.0–1.0
+  overallScore    Int? // 0–10 (difficulty-capped)
+  overallScore100 Int? // 0–100 convenience field (overallScore * 10)
+  confidence      Float? // LLM confidence 0.0–1.0
 
   // ── Dimensional breakdown (NEW) ───────────────────────────────────────────
   // Technical:   { correctness, depth, clarity, communication }     all 0–10
@@ -463,13 +460,13 @@ model Evaluation {
   dimensions Json?
 
   // ── Comparative analysis (NEW) ────────────────────────────────────────────
-  missingConcepts  String[]  @default([])  // key concepts absent from the answer
-  incorrectPoints  String[]  @default([])  // factual errors or misconceptions
+  missingConcepts String[] @default([]) // key concepts absent from the answer
+  incorrectPoints String[] @default([]) // factual errors or misconceptions
 
   // ── Per-answer verdict (strict, replaces vague "feedback") ────────────────
-  strengths String[]  @default([])   // specific things done well
-  weaknesses String[] @default([])   // specific gaps, named explicitly
-  verdict   String?                  // 1-line brutally honest summary
+  strengths  String[] @default([]) // specific things done well
+  weaknesses String[] @default([]) // specific gaps, named explicitly
+  verdict    String? // 1-line brutally honest summary
 
   // ── Follow-up ─────────────────────────────────────────────────────────────
   followup         Boolean @default(false)
@@ -479,7 +476,7 @@ model Evaluation {
   clarity      Int?
   technical    Int?
   improvements String?
-  feedback     String?    // mirrors verdict for backward compat
+  feedback     String? // mirrors verdict for backward compat
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

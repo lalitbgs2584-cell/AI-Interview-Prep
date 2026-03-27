@@ -1,8 +1,0 @@
--- AlterTable
-ALTER TABLE "user" ADD COLUMN     "activityMap" JSONB NOT NULL DEFAULT '{}',
-ADD COLUMN     "bestStreak" INTEGER NOT NULL DEFAULT 0,
-ADD COLUMN     "isBlocked" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN     "isBlockedAt" TIMESTAMP(3),
-ADD COLUMN     "isBlockedReason" TEXT NOT NULL DEFAULT '',
-ADD COLUMN     "lastLoginAt" TIMESTAMP(3),
-ADD COLUMN     "streak" INTEGER NOT NULL DEFAULT 0;

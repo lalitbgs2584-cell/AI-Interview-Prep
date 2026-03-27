@@ -483,7 +483,7 @@ export default function FeedbackPage() {
       {/* ── TOP BAR ─────────────────────────────────────────── */}
       <nav className="fb-topbar fade-down">
         <div className="fb-topbar-left">
-          <Link href="/" className="fb-logo">Interview<span>AI</span></Link>
+          <Link href="/dashboard" className="fb-logo">Interview<span>AI</span></Link>
           <div className="fb-topbar-divider" />
           <span className="fb-topbar-title">Session Feedback</span>
         </div>

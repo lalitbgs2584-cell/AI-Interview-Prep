@@ -24,6 +24,13 @@ CREATE TABLE "user" (
     "updatedAt" TIMESTAMP(3) NOT NULL,
     "isResumeUploaded" BOOLEAN NOT NULL DEFAULT false,
     "isDeleted" BOOLEAN NOT NULL DEFAULT false,
+    "isBlocked" BOOLEAN NOT NULL DEFAULT false,
+    "isBlockedReason" TEXT NOT NULL DEFAULT '',
+    "isBlockedAt" TIMESTAMP(3),
+    "streak" INTEGER NOT NULL DEFAULT 0,
+    "bestStreak" INTEGER NOT NULL DEFAULT 0,
+    "lastLoginAt" TIMESTAMP(3),
+    "activityMap" JSONB NOT NULL DEFAULT '{}',
     "role" "UserRole" NOT NULL DEFAULT 'USER',
 
     CONSTRAINT "user_pkey" PRIMARY KEY ("id")
@@ -92,18 +99,6 @@ CREATE TABLE "user_skill" (
 );
 
 -- CreateTable
-CREATE TABLE "question" (
-    "id" TEXT NOT NULL,
-    "content" TEXT NOT NULL,
-    "difficulty" "Difficulty",
-    "type" "InterviewType",
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "question_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
 CREATE TABLE "interview" (
     "id" TEXT NOT NULL,
     "title" TEXT NOT NULL,
@@ -112,52 +107,16 @@ CREATE TABLE "interview" (
     "videoUrl" TEXT,
     "status" "InterviewStatus" NOT NULL DEFAULT 'CREATED',
     "type" "InterviewType" NOT NULL DEFAULT 'TECHNICAL',
+    "endReason" TEXT,
+    "interruptionCount" INTEGER,
+    "tabSwitches" INTEGER NOT NULL DEFAULT 0,
+    "fsExits" INTEGER NOT NULL DEFAULT 0,
+    "sessionDurationSec" INTEGER NOT NULL DEFAULT 0,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
     "completedAt" TIMESTAMP(3),
 
     CONSTRAINT "interview_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "interview_question" (
-    "id" TEXT NOT NULL,
-    "interviewId" TEXT NOT NULL,
-    "questionId" TEXT NOT NULL,
-    "order" INTEGER,
-    "score" INTEGER,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT "interview_question_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "response" (
-    "id" TEXT NOT NULL,
-    "interviewQuestionId" TEXT NOT NULL,
-    "submittedAt" TIMESTAMP(3),
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "response_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
-CREATE TABLE "evaluation" (
-    "id" TEXT NOT NULL,
-    "responseId" TEXT NOT NULL,
-    "overallScore" INTEGER,
-    "clarity" INTEGER,
-    "technical" INTEGER,
-    "confidence" INTEGER,
-    "confidenceScore" DOUBLE PRECISION,
-    "feedback" TEXT,
-    "strengths" TEXT,
-    "improvements" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "evaluation_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -254,6 +213,105 @@ CREATE TABLE "work_experience" (
     CONSTRAINT "work_experience_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "gap_report" (
+    "id" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "conceptFrequency" JSONB NOT NULL DEFAULT '{}',
+    "persistentGaps" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "dimensionAverages" JSONB NOT NULL DEFAULT '{}',
+    "lastUpdatedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "gap_report_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "interview_summary" (
+    "id" TEXT NOT NULL,
+    "interviewId" TEXT NOT NULL,
+    "overallScore" INTEGER NOT NULL DEFAULT 0,
+    "plainAvg" DOUBLE PRECISION NOT NULL DEFAULT 0,
+    "weightedAvg" DOUBLE PRECISION NOT NULL DEFAULT 0,
+    "recommendation" TEXT NOT NULL DEFAULT 'Needs More Evaluation',
+    "durationSeconds" INTEGER NOT NULL DEFAULT 0,
+    "summary" TEXT,
+    "whatWentRight" JSONB NOT NULL DEFAULT '[]',
+    "whatWentWrong" JSONB NOT NULL DEFAULT '[]',
+    "tips" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "skillScores" JSONB NOT NULL DEFAULT '{}',
+    "questionScores" JSONB NOT NULL DEFAULT '[]',
+    "gapAnalysis" JSONB NOT NULL DEFAULT '{}',
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "interview_summary_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "question" (
+    "id" TEXT NOT NULL,
+    "content" TEXT NOT NULL,
+    "difficulty" "Difficulty",
+    "type" "InterviewType",
+    "expectedAnswer" JSONB,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "question_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "interview_question" (
+    "id" TEXT NOT NULL,
+    "interviewId" TEXT NOT NULL,
+    "questionId" TEXT NOT NULL,
+    "order" INTEGER,
+    "score" INTEGER,
+    "expectedAnswer" JSONB,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "interview_question_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "response" (
+    "id" TEXT NOT NULL,
+    "interviewQuestionId" TEXT NOT NULL,
+    "userAnswer" TEXT,
+    "submittedAt" TIMESTAMP(3),
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "response_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "evaluation" (
+    "id" TEXT NOT NULL,
+    "responseId" TEXT NOT NULL,
+    "overallScore" INTEGER,
+    "overallScore100" INTEGER,
+    "confidence" DOUBLE PRECISION,
+    "dimensions" JSONB,
+    "missingConcepts" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "incorrectPoints" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "strengths" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "weaknesses" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "verdict" TEXT,
+    "followup" BOOLEAN NOT NULL DEFAULT false,
+    "followupQuestion" TEXT,
+    "clarity" INTEGER,
+    "technical" INTEGER,
+    "improvements" TEXT,
+    "feedback" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "evaluation_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "user_email_key" ON "user"("email");
 
@@ -282,34 +340,10 @@ CREATE INDEX "user_skill_skillId_idx" ON "user_skill"("skillId");
 CREATE UNIQUE INDEX "user_skill_userId_skillId_key" ON "user_skill"("userId", "skillId");
 
 -- CreateIndex
-CREATE INDEX "question_difficulty_idx" ON "question"("difficulty");
-
--- CreateIndex
-CREATE INDEX "question_type_idx" ON "question"("type");
-
--- CreateIndex
 CREATE INDEX "interview_userId_idx" ON "interview"("userId");
 
 -- CreateIndex
 CREATE INDEX "interview_status_idx" ON "interview"("status");
-
--- CreateIndex
-CREATE INDEX "interview_question_interviewId_idx" ON "interview_question"("interviewId");
-
--- CreateIndex
-CREATE INDEX "interview_question_questionId_idx" ON "interview_question"("questionId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "interview_question_interviewId_questionId_key" ON "interview_question"("interviewId", "questionId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "response_interviewQuestionId_key" ON "response"("interviewQuestionId");
-
--- CreateIndex
-CREATE INDEX "response_interviewQuestionId_idx" ON "response"("interviewQuestionId");
-
--- CreateIndex
-CREATE UNIQUE INDEX "evaluation_responseId_key" ON "evaluation"("responseId");
 
 -- CreateIndex
 CREATE INDEX "file_userId_idx" ON "file"("userId");
@@ -341,6 +375,42 @@ CREATE INDEX "education_resumeId_idx" ON "education"("resumeId");
 -- CreateIndex
 CREATE INDEX "work_experience_resumeId_idx" ON "work_experience"("resumeId");
 
+-- CreateIndex
+CREATE INDEX "gap_report_userId_idx" ON "gap_report"("userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "gap_report_userId_key" ON "gap_report"("userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "interview_summary_interviewId_key" ON "interview_summary"("interviewId");
+
+-- CreateIndex
+CREATE INDEX "interview_summary_interviewId_idx" ON "interview_summary"("interviewId");
+
+-- CreateIndex
+CREATE INDEX "question_difficulty_idx" ON "question"("difficulty");
+
+-- CreateIndex
+CREATE INDEX "question_type_idx" ON "question"("type");
+
+-- CreateIndex
+CREATE INDEX "interview_question_interviewId_idx" ON "interview_question"("interviewId");
+
+-- CreateIndex
+CREATE INDEX "interview_question_questionId_idx" ON "interview_question"("questionId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "interview_question_interviewId_questionId_key" ON "interview_question"("interviewId", "questionId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "response_interviewQuestionId_key" ON "response"("interviewQuestionId");
+
+-- CreateIndex
+CREATE INDEX "response_interviewQuestionId_idx" ON "response"("interviewQuestionId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "evaluation_responseId_key" ON "evaluation"("responseId");
+
 -- AddForeignKey
 ALTER TABLE "session" ADD CONSTRAINT "session_userId_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
@@ -355,18 +425,6 @@ ALTER TABLE "user_skill" ADD CONSTRAINT "user_skill_skillId_fkey" FOREIGN KEY ("
 
 -- AddForeignKey
 ALTER TABLE "interview" ADD CONSTRAINT "interview_userId_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "interview_question" ADD CONSTRAINT "interview_question_interviewId_fkey" FOREIGN KEY ("interviewId") REFERENCES "interview"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "interview_question" ADD CONSTRAINT "interview_question_questionId_fkey" FOREIGN KEY ("questionId") REFERENCES "question"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "response" ADD CONSTRAINT "response_interviewQuestionId_fkey" FOREIGN KEY ("interviewQuestionId") REFERENCES "interview_question"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- AddForeignKey
-ALTER TABLE "evaluation" ADD CONSTRAINT "evaluation_responseId_fkey" FOREIGN KEY ("responseId") REFERENCES "response"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "file" ADD CONSTRAINT "file_userId_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -391,3 +449,21 @@ ALTER TABLE "education" ADD CONSTRAINT "education_resumeId_fkey" FOREIGN KEY ("r
 
 -- AddForeignKey
 ALTER TABLE "work_experience" ADD CONSTRAINT "work_experience_resumeId_fkey" FOREIGN KEY ("resumeId") REFERENCES "resume"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "gap_report" ADD CONSTRAINT "gap_report_userId_fkey" FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "interview_summary" ADD CONSTRAINT "interview_summary_interviewId_fkey" FOREIGN KEY ("interviewId") REFERENCES "interview"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "interview_question" ADD CONSTRAINT "interview_question_interviewId_fkey" FOREIGN KEY ("interviewId") REFERENCES "interview"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "interview_question" ADD CONSTRAINT "interview_question_questionId_fkey" FOREIGN KEY ("questionId") REFERENCES "question"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "response" ADD CONSTRAINT "response_interviewQuestionId_fkey" FOREIGN KEY ("interviewQuestionId") REFERENCES "interview_question"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "evaluation" ADD CONSTRAINT "evaluation_responseId_fkey" FOREIGN KEY ("responseId") REFERENCES "response"("id") ON DELETE CASCADE ON UPDATE CASCADE;

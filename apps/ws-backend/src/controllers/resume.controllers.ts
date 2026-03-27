@@ -768,12 +768,13 @@ export const resumeController = {
         res.status(404).json({ error: `Interview ${interviewId} not found in database.` });
         return;
       }
+      console.log("Interview status is :",interview.status)
 
       if (interview.status === "COMPLETED") {
         res.json({ success: true, message: "Already persisted", interviewId });
         return;
       }
-
+      
       await prisma.$transaction(async (tx) => {
         // ── Per-question rows ─────────────────────────────────────────────
         for (const step of history) {
@@ -893,6 +894,7 @@ export const resumeController = {
           data:  { status: "COMPLETED", completedAt: new Date() },
         });
       });
+      console.log("UPDATED STATUS:", interview.status);
 
       // Save score to Redis history list (for score-history chart)
       const historyKey      = `user:${interview.userId}:interview_scores`;

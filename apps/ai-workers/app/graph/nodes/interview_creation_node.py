@@ -22,6 +22,17 @@ NODE 8  finalize            — HYBRID:
                                   repeated patterns.
                                 Step 2 (LLM) — narrate computed facts into readable
                                   summary.  LLM cannot invent data it wasn't given.
+
+PATCH TRACKING:
+- PATCH 1: InterviewState TypedDict — 3 new integrity fields
+- PATCH 2: load_context() — initialize new fields
+- PATCH 3: handle_interruption_event() — NEW socket handler
+- PATCH 4: handle_end_event() — NEW socket handler
+- PATCH 5: finalize() — read integrity fields from Redis
+- PATCH 6: narration_prompt — include end_reason + interruptions in facts
+- PATCH 7: _compute_deterministic_summary() — interruption penalty
+- PATCH 8: Call site — pass interruption_count to helper
+- PATCH 9: Mem0 memory text — include end_reason + interruption note
 """
 
 import json
@@ -60,11 +71,15 @@ llm = ChatOpenAI(model="gpt-4.1", temperature=0.7, api_key=settings.OPENAI_API_K
 llm_eval = ChatOpenAI(model="gpt-4.1", temperature=0.1, api_key=settings.OPENAI_API_KEY)
 
 # Near-zero temperature for final summary narration (facts only, no invention)
-llm_summary = ChatOpenAI(model="gpt-4.1", temperature=0.2, api_key=settings.OPENAI_API_KEY)
+llm_summary = ChatOpenAI(
+    model="gpt-4.1", temperature=0.2, api_key=settings.OPENAI_API_KEY
+)
 
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small", api_key=settings.OPENAI_API_KEY)
+embeddings = OpenAIEmbeddings(
+    model="text-embedding-3-small", api_key=settings.OPENAI_API_KEY
+)
 
-QDRANT_COLLECTION     = "resumes"
+QDRANT_COLLECTION = "resumes"
 DEFAULT_MAX_QUESTIONS = 10
 HUMAN_INTERVIEW_TYPES = {"behavioral", "hr"}
 
@@ -72,6 +87,7 @@ HUMAN_INTERVIEW_TYPES = {"behavioral", "hr"}
 # ─────────────────────────────────────────────
 # UTILITIES
 # ─────────────────────────────────────────────
+
 
 def publish_event(channel: str, payload: dict) -> None:
     client.publish(channel, json.dumps(payload))
@@ -152,15 +168,21 @@ def strip_custom_config(description: str) -> str:
 
 DEFAULT_DIFFICULTY_MAP = {
     0: "intro",
-    1: "easy",  2: "easy",  3: "easy",
-    4: "medium", 5: "medium", 6: "medium", 7: "medium",
-    8: "hard",  9: "hard",
+    1: "easy",
+    2: "easy",
+    3: "easy",
+    4: "medium",
+    5: "medium",
+    6: "medium",
+    7: "medium",
+    8: "hard",
+    9: "hard",
 }
 
 CUSTOM_DIFFICULTY_MAPS = {
-    "easy":   {i: ("intro" if i == 0 else "easy") for i in range(15)},
+    "easy": {i: ("intro" if i == 0 else "easy") for i in range(15)},
     "medium": {0: "intro", 1: "easy", 2: "easy", **{i: "medium" for i in range(3, 15)}},
-    "hard":   {0: "intro", 1: "easy", 2: "medium", **{i: "hard" for i in range(3, 15)}},
+    "hard": {0: "intro", 1: "easy", 2: "medium", **{i: "hard" for i in range(3, 15)}},
 }
 
 # Difficulty weights for score aggregation (harder questions count more)
@@ -176,15 +198,15 @@ DIFFICULTY_MAX_SCORES = {"intro": 10, "easy": 8, "medium": 9, "hard": 10}
 
 
 def resolve_difficulty(index: int, description: str) -> str:
-    config   = parse_custom_config(description or "")
+    config = parse_custom_config(description or "")
     override = config.get("difficulty_override", "")
-    dmap     = CUSTOM_DIFFICULTY_MAPS.get(override, DEFAULT_DIFFICULTY_MAP)
+    dmap = CUSTOM_DIFFICULTY_MAPS.get(override, DEFAULT_DIFFICULTY_MAP)
     return dmap.get(index, "hard")
 
 
 def resolve_max_questions(description: str) -> int:
     config = parse_custom_config(description or "")
-    raw    = config.get("max_questions")
+    raw = config.get("max_questions")
     if raw is not None:
         try:
             return max(3, min(15, int(raw)))
@@ -287,13 +309,13 @@ _UNCERTAINTY_RE = re.compile(
     re.IGNORECASE,
 )
 _SHORT_ANSWER_WORDS = 8
-_PIVOT_THRESHOLD    = 3
+_PIVOT_THRESHOLD = 3
 
 BEHAVIORAL_FALLBACKS = {
-    "intro":  "Could you start by walking me through your background and what excites you about this opportunity?",
-    "easy":   "Tell me about a time you had to collaborate closely with a teammate who had a very different working style. How did you handle it?",
+    "intro": "Could you start by walking me through your background and what excites you about this opportunity?",
+    "easy": "Tell me about a time you had to collaborate closely with a teammate who had a very different working style. How did you handle it?",
     "medium": "Describe a situation where you had to manage a conflict within your team. What steps did you take and what was the outcome?",
-    "hard":   "Tell me about a time you had to drive an important initiative without having direct authority. How did you build alignment and what was the result?",
+    "hard": "Tell me about a time you had to drive an important initiative without having direct authority. How did you build alignment and what was the result?",
 }
 
 
@@ -320,20 +342,24 @@ def _build_supportive_response(
     This helps the candidate think; it does NOT inflate their score.
     """
     human_round = is_human_round(interview_type)
-    is_pivot    = consecutive_struggles >= _PIVOT_THRESHOLD
+    is_pivot = consecutive_struggles >= _PIVOT_THRESHOLD
 
     scaffold_hint = (
         "Ask them to recall any situation — even a small or informal one — "
         "that relates to the theme of the original question."
-        if human_round else
-        "Break the question into a simpler sub-concept, or invite them to reason "
+        if human_round
+        else "Break the question into a simpler sub-concept, or invite them to reason "
         "through a general approach even without the exact answer."
     )
 
     pivot_note = (
-        "\nThis is their 3rd consecutive struggle. "
-        "Acknowledge the difficulty, say you'll move on — do NOT ask another question yet."
-    ) if is_pivot else ""
+        (
+            "\nThis is their 3rd consecutive struggle. "
+            "Acknowledge the difficulty, say you'll move on — do NOT ask another question yet."
+        )
+        if is_pivot
+        else ""
+    )
 
     no_tech_note = "\nABSOLUTE RULE: Zero technical content." if human_round else ""
 
@@ -367,6 +393,7 @@ def _build_supportive_response(
 # ─────────────────────────────────────────────
 # GAP ANALYSIS ENGINE
 # ─────────────────────────────────────────────
+
 
 def compute_gap_analysis(history: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -407,24 +434,75 @@ def compute_gap_analysis(history: List[Dict[str, Any]]) -> Dict[str, Any]:
             weak_dimensions.append(dim)
 
     return {
-        "repeated_gaps":      repeated_gaps,
-        "all_gaps":           list(gap_frequency.keys()),
-        "gap_frequency":      gap_frequency,
-        "weak_dimensions":    weak_dimensions,
+        "repeated_gaps": repeated_gaps,
+        "all_gaps": list(gap_frequency.keys()),
+        "gap_frequency": gap_frequency,
+        "weak_dimensions": weak_dimensions,
         "dimension_averages": dim_averages,
-        "incorrect_points":   list(incorrect_frequency.keys()),
+        "incorrect_points": list(incorrect_frequency.keys()),
     }
+
+
+# ─────────────────────────────────────────────
+# SOCKET HANDLERS (PATCHES 3 & 4)
+# ─────────────────────────────────────────────
+
+
+def handle_interruption_event(interview_id: str, count: int, timestamp: int) -> None:
+    """
+    PATCH 3: Called when the frontend emits 'interview:interruption'.
+    Persists the latest interruption count to Redis so finalize() can read it.
+    Also publishes a proctoring event for real-time monitoring dashboards.
+    """
+    key = f"interview:{interview_id}:interruptions"
+    client.set(key, str(count), ex=60 * 60 * 24)  # 24-hour TTL
+
+    publish_event(
+        f"interview:{interview_id}:proctoring",
+        {
+            "type": "interruption",
+            "count": count,
+            "timestamp": timestamp,
+        },
+    )
+    print(f"[interruption] interview={interview_id} count={count}")
+
+
+def handle_end_event(interview_id: str, reason: str, duration_sec: int) -> None:
+    """
+    PATCH 4: Called when the frontend emits 'interview:end'.
+    Sets the persistent end flag (which wait_for_answer already polls)
+    and records the reason so finalize() can include it in the report.
+    """
+    end_key = f"interview:{interview_id}:ended"
+    reason_key = f"interview:{interview_id}:end_reason"
+    dur_key = f"interview:{interview_id}:duration_sec"
+
+    # This is what wait_for_answer already checks — setting it here is the
+    # CORRECT way to break out of the blocking poll loop in NODE 4.
+    client.set(end_key, "1", ex=60 * 60 * 24)
+    client.set(reason_key, reason, ex=60 * 60 * 24)
+    client.set(dur_key, str(duration_sec), ex=60 * 60 * 24)
+
+    print(
+        f"[end_event] interview={interview_id} reason={reason} duration={duration_sec}s"
+    )
 
 
 # ─────────────────────────────────────────────
 # NODE 1: LOAD CONTEXT
 # ─────────────────────────────────────────────
 
+
 def load_context(state: InterviewState) -> dict:
+    """
+    NODE 1: Load context for interview.
+    PATCH 2: Initialize the three new integrity fields.
+    """
     print("[load_context] started")
-    user_id        = state.get("user_id")
-    role           = state.get("role") or "Software Engineer"
-    description    = state.get("description") or ""
+    user_id = state.get("user_id")
+    role = state.get("role") or "Software Engineer"
+    description = state.get("description") or ""
     interview_type = state.get("interview_type", "technical")
 
     custom_config = parse_custom_config(description)
@@ -438,7 +516,11 @@ def load_context(state: InterviewState) -> dict:
         results, _ = qdrant.scroll(
             collection_name=QDRANT_COLLECTION,
             scroll_filter=models.Filter(
-                must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
+                must=[
+                    models.FieldCondition(
+                        key="user_id", match=models.MatchValue(value=user_id)
+                    )
+                ]
             ),
             limit=10,
             with_payload=True,
@@ -457,7 +539,9 @@ def load_context(state: InterviewState) -> dict:
                     "MATCH (u:Candidate {user_id: $user_id})-[:HAS_SKILL]->(s:Skill) RETURN s.name AS skill",
                     user_id=user_id,
                 )
-                graph_skills = [str(r["skill"]) for r in result if r["skill"] is not None]
+                graph_skills = [
+                    str(r["skill"]) for r in result if r["skill"] is not None
+                ]
         except Exception as e:
             print(f"[load_context] Neo4j error: {e}")
 
@@ -468,7 +552,8 @@ def load_context(state: InterviewState) -> dict:
     try:
         raw = memory_client.search(query=mem_query, user_id=user_id, limit=10)
         memories = (
-            raw.get("results", []) if isinstance(raw, dict)
+            raw.get("results", [])
+            if isinstance(raw, dict)
             else (raw if isinstance(raw, list) else [])
         )
     except Exception as e:
@@ -482,17 +567,21 @@ def load_context(state: InterviewState) -> dict:
     )
 
     return {
-        "resume_context":        resume_chunks,
-        "skills":                graph_skills,
-        "memories":              memories,
-        "candidate_name":        candidate_name,
-        "current_index":         0,
-        "question_history":      [],
-        "start_time":            int(time.time()),
+        "resume_context": resume_chunks,
+        "skills": graph_skills,
+        "memories": memories,
+        "candidate_name": candidate_name,
+        "current_index": 0,
+        "question_history": [],
+        "start_time": int(time.time()),
         "consecutive_struggles": 0,
-        "is_support_turn":       False,
-        "timeout":               False,
-        "gap_map":               {},
+        "is_support_turn": False,
+        "timeout": False,
+        "gap_map": {},
+        # ── PATCH 2: Initialize new integrity fields ──────────────────────
+        "interruption_count": 0,
+        "end_reason": "user_ended",
+        "session_duration_sec": 0,
     }
 
 
@@ -500,43 +589,46 @@ def load_context(state: InterviewState) -> dict:
 # NODE 2: GENERATE QUESTION  (+ expected answer)
 # ─────────────────────────────────────────────
 
+
 def generate_question(state: InterviewState) -> dict:
     """
-    Single LLM call returns BOTH the question AND its expected answer.
+    NODE 2: Single LLM call returns BOTH the question AND its expected answer.
     The expected answer is stored in state and used later by evaluate_answer
     for comparative evaluation instead of in-isolation scoring.
     """
     print("[generate_question] started")
 
-    index                 = state.get("current_index", 0)
-    role                  = state.get("role") or "Software Engineer"
-    interview_type        = state.get("interview_type", "technical")
-    candidate_name        = state.get("candidate_name") or "the candidate"
-    question_history      = state.get("question_history") or []
-    description           = state.get("description") or ""
-    last_answer           = state.get("user_answer", "")
+    index = state.get("current_index", 0)
+    role = state.get("role") or "Software Engineer"
+    interview_type = state.get("interview_type", "technical")
+    candidate_name = state.get("candidate_name") or "the candidate"
+    question_history = state.get("question_history") or []
+    description = state.get("description") or ""
+    last_answer = state.get("user_answer", "")
     consecutive_struggles = state.get("consecutive_struggles", 0)
 
-    skills        = [str(s) for s in (state.get("skills") or []) if s is not None]
-    resume_chunks = [str(c) for c in (state.get("resume_context") or []) if c is not None]
-    raw_memories  = [m for m in (state.get("memories") or []) if m is not None]
+    skills = [str(s) for s in (state.get("skills") or []) if s is not None]
+    resume_chunks = [
+        str(c) for c in (state.get("resume_context") or []) if c is not None
+    ]
+    raw_memories = [m for m in (state.get("memories") or []) if m is not None]
 
     if _is_terminated(state):
         print("[generate_question] ⛔ Terminated — skipping")
         return {
-            "current_question":      "",
-            "expected_answer":       {},
-            "question_history":      question_history,
-            "current_index":         index,
-            "difficulty":            state.get("difficulty", "medium"),
-            "followup":              False,
-            "followup_question":     "",
+            "current_question": "",
+            "expected_answer": {},
+            "question_history": question_history,
+            "current_index": index,
+            "difficulty": state.get("difficulty", "medium"),
+            "followup": False,
+            "followup_question": "",
             "consecutive_struggles": 0,
-            "is_support_turn":       False,
-            "timeout":               True,
+            "is_support_turn": False,
+            "timeout": True,
         }
 
-    custom_config     = parse_custom_config(description)
+    custom_config = parse_custom_config(description)
     clean_description = strip_custom_config(description)
     custom_topics: List[str] = custom_config.get("topics", [])
     human_round = is_human_round(interview_type)
@@ -551,7 +643,9 @@ def generate_question(state: InterviewState) -> dict:
 
     if index > 0 and _is_uncertain(last_answer):
         new_struggles = consecutive_struggles + 1
-        print(f"[generate_question] ⚠️  Uncertainty detected — struggle #{new_struggles}")
+        print(
+            f"[generate_question] ⚠️  Uncertainty detected — struggle #{new_struggles}"
+        )
 
         supportive_text = _build_supportive_response(
             last_question=last_question,
@@ -562,24 +656,26 @@ def generate_question(state: InterviewState) -> dict:
             candidate_name=candidate_name,
         )
         is_pivot = new_struggles >= _PIVOT_THRESHOLD
-        print(f"[generate_question] {'Pivoting' if is_pivot else 'Scaffolding'}: {supportive_text[:80]}…")
+        print(
+            f"[generate_question] {'Pivoting' if is_pivot else 'Scaffolding'}: {supportive_text[:80]}…"
+        )
 
         return {
-            "current_question":      supportive_text,
-            "expected_answer":       {},   # no expected answer for support turns
-            "question_history":      question_history,
-            "current_index":         index + 1 if is_pivot else index,
-            "difficulty":            state.get("difficulty", "medium"),
-            "followup":              True,
-            "followup_question":     supportive_text,
+            "current_question": supportive_text,
+            "expected_answer": {},  # no expected answer for support turns
+            "question_history": question_history,
+            "current_index": index + 1 if is_pivot else index,
+            "difficulty": state.get("difficulty", "medium"),
+            "followup": True,
+            "followup_question": supportive_text,
             "consecutive_struggles": 0 if is_pivot else new_struggles,
-            "is_support_turn":       True,
-            "timeout":               False,
+            "is_support_turn": True,
+            "timeout": False,
         }
 
     # ── NORMAL QUESTION GENERATION ────────────────────────────────────────
-    new_struggles          = 0
-    difficulty             = resolve_difficulty(index, description)
+    new_struggles = 0
+    difficulty = resolve_difficulty(index, description)
     difficulty_instruction = get_difficulty_instruction(difficulty, interview_type)
 
     prev_qa_summary = ""
@@ -590,10 +686,13 @@ def generate_question(state: InterviewState) -> dict:
             lines.append(f"A: {entry.get('answer', '(no answer yet)')}")
         prev_qa_summary = "\n".join(lines)
 
-    resume_text   = "\n\n".join(resume_chunks[:4])
+    resume_text = "\n\n".join(resume_chunks[:4])
     max_questions = resolve_max_questions(description)
     memories_text = json.dumps(
-        [m.get("memory", str(m)) if isinstance(m, dict) else str(m) for m in raw_memories[:5]],
+        [
+            m.get("memory", str(m)) if isinstance(m, dict) else str(m)
+            for m in raw_memories[:5]
+        ],
         indent=2,
     )
 
@@ -604,18 +703,13 @@ def generate_question(state: InterviewState) -> dict:
         )
 
     extra_context_block = (
-        f"\nSession context:\n\"\"\"\n{clean_description[:1500]}\n\"\"\"\n"
-        if clean_description else ""
+        f'\nSession context:\n"""\n{clean_description[:1500]}\n"""\n'
+        if clean_description
+        else ""
     )
 
     # ── Build prompt — returns JSON with question + expected_answer ─────────
     if human_round:
-        expected_answer_schema = """{
-  "key_concepts": ["STAR structure used", "specific personal situation named", "measurable outcome stated", "lessons articulated"],
-  "reasoning_steps": ["Set the Situation clearly", "Define the Task/responsibility", "Describe YOUR specific Actions", "State the measurable Result"],
-  "ideal_structure": "2-4 minute STAR narrative with a clear 'I' (not 'we') focus, concrete outcome, and a reflection.",
-  "common_mistakes": ["Using 'we' instead of 'I'", "No measurable outcome", "Vague or generic situation", "Missing the Result or lesson"]
-}"""
         system_prompt = f"""You are a strict {interview_type.upper()} interviewer for a {role} position.
 
 Candidate: {candidate_name}
@@ -676,41 +770,69 @@ Return ONLY this JSON:
   }}
 }}"""
 
-    question        = ""
+    question = ""
     expected_answer = {}
 
     try:
-        response_text = llm.invoke([HumanMessage(content=system_prompt)]).content.strip()
-        parsed        = safe_json_parse(response_text)
-        question        = str(parsed.get("question", "")).strip()
+        response_text = llm.invoke(
+            [HumanMessage(content=system_prompt)]
+        ).content.strip()
+        parsed = safe_json_parse(response_text)
+        question = str(parsed.get("question", "")).strip()
         expected_answer = parsed.get("expected_answer", {})
 
         # Behavioral guard — re-generate if technical leakage detected
         if human_round:
             TECH_KEYWORDS = [
-                "algorithm", "code", "implement", "function", "database", "sql",
-                "api", "rest", "graphql", "system design", "data structure",
-                "big o", "complexity", "framework", "runtime", "deploy",
-                "docker", "kubernetes", "microservice", "async", "thread",
-                "cache", "index", "query", "schema",
+                "algorithm",
+                "code",
+                "implement",
+                "function",
+                "database",
+                "sql",
+                "api",
+                "rest",
+                "graphql",
+                "system design",
+                "data structure",
+                "big o",
+                "complexity",
+                "framework",
+                "runtime",
+                "deploy",
+                "docker",
+                "kubernetes",
+                "microservice",
+                "async",
+                "thread",
+                "cache",
+                "index",
+                "query",
+                "schema",
             ]
             if any(kw in question.lower() for kw in TECH_KEYWORDS):
-                print("[generate_question] ⚠️  Technical leakage detected — regenerating")
+                print(
+                    "[generate_question] ⚠️  Technical leakage detected — regenerating"
+                )
                 retry_prompt = (
                     f"{system_prompt}\n\n"
                     "⚠️  Previous attempt leaked technical content. "
                     "Regenerate a purely behavioral question with ZERO engineering concepts."
                 )
-                response_text   = llm.invoke([HumanMessage(content=retry_prompt)]).content.strip()
-                parsed          = safe_json_parse(response_text)
-                question        = str(parsed.get("question", "")).strip()
+                response_text = llm.invoke(
+                    [HumanMessage(content=retry_prompt)]
+                ).content.strip()
+                parsed = safe_json_parse(response_text)
+                question = str(parsed.get("question", "")).strip()
                 expected_answer = parsed.get("expected_answer", {})
 
     except Exception as e:
         print(f"[generate_question] LLM/parse error: {e}")
         # Deterministic fallback — question only; expected_answer is minimal
         if human_round:
-            question = BEHAVIORAL_FALLBACKS.get(difficulty, BEHAVIORAL_FALLBACKS["easy"])
+            question = BEHAVIORAL_FALLBACKS.get(
+                difficulty, BEHAVIORAL_FALLBACKS["easy"]
+            )
         elif difficulty == "intro":
             question = (
                 f"Hi {candidate_name}! Could you start by telling me a bit about yourself "
@@ -730,40 +852,53 @@ Return ONLY this JSON:
 
         # Minimal expected answer for fallback questions
         expected_answer = {
-            "key_concepts":    ["relevant technical depth", "clear problem statement", "outcome"],
-            "reasoning_steps": ["Identify the problem", "Describe your approach", "Share the outcome"],
+            "key_concepts": [
+                "relevant technical depth",
+                "clear problem statement",
+                "outcome",
+            ],
+            "reasoning_steps": [
+                "Identify the problem",
+                "Describe your approach",
+                "Share the outcome",
+            ],
             "ideal_structure": "Concise problem-solution-outcome narrative with specifics.",
-            "common_mistakes": ["Too vague", "No outcome mentioned", "No personal contribution"],
+            "common_mistakes": [
+                "Too vague",
+                "No outcome mentioned",
+                "No personal contribution",
+            ],
         }
 
     entry = {
-        "question":        question,
+        "question": question,
         "expected_answer": expected_answer,
-        "answer":          "",
-        "index":           index,
-        "difficulty":      difficulty,
-        "timestamp":       int(time.time()),
+        "answer": "",
+        "index": index,
+        "difficulty": difficulty,
+        "timestamp": int(time.time()),
     }
 
     print(f"[generate_question] Q#{index+1} ({difficulty}): {question[:100]}…")
 
     return {
-        "current_question":      question,
-        "expected_answer":       expected_answer,
-        "question_history":      [*question_history, entry],
-        "current_index":         index + 1,
-        "difficulty":            difficulty,
-        "followup":              False,
-        "followup_question":     "",
+        "current_question": question,
+        "expected_answer": expected_answer,
+        "question_history": [*question_history, entry],
+        "current_index": index + 1,
+        "difficulty": difficulty,
+        "followup": False,
+        "followup_question": "",
         "consecutive_struggles": new_struggles,
-        "is_support_turn":       False,
-        "timeout":               False,
+        "is_support_turn": False,
+        "timeout": False,
     }
 
 
 # ─────────────────────────────────────────────
 # NODE 3: PUBLISH QUESTION
 # ─────────────────────────────────────────────
+
 
 def publish_question(state: InterviewState) -> dict:
     print("[publish_question] started")
@@ -772,27 +907,28 @@ def publish_question(state: InterviewState) -> dict:
         print("[publish_question] ⛔ Terminated — skipping")
         return {}
 
-    interview_id      = state.get("interview_id")
-    index             = state.get("current_index", 1) - 1
-    difficulty        = state.get("difficulty", "intro")
-    is_followup       = state.get("followup", False)
+    interview_id = state.get("interview_id")
+    index = state.get("current_index", 1) - 1
+    difficulty = state.get("difficulty", "intro")
+    is_followup = state.get("followup", False)
     followup_question = state.get("followup_question", "")
-    is_support_turn   = state.get("is_support_turn", False)
-    question          = (
-        followup_question if is_followup and followup_question
+    is_support_turn = state.get("is_support_turn", False)
+    question = (
+        followup_question
+        if is_followup and followup_question
         else state.get("current_question", "")
     )
 
     publish_event(
         f"interview:{interview_id}:events",
         {
-            "type":            "question",
-            "index":           index,
-            "difficulty":      difficulty,
-            "question":        question,
-            "is_followup":     is_followup,
+            "type": "question",
+            "index": index,
+            "difficulty": difficulty,
+            "question": question,
+            "is_followup": is_followup,
             "is_support_turn": is_support_turn,
-            "time":            int(time.time() * 1000),
+            "time": int(time.time() * 1000),
         },
     )
     return {}
@@ -802,6 +938,7 @@ def publish_question(state: InterviewState) -> dict:
 # NODE 4: WAIT FOR ANSWER
 # ─────────────────────────────────────────────
 
+
 def wait_for_answer(state: InterviewState) -> dict:
     print("[wait_for_answer] started")
 
@@ -809,11 +946,11 @@ def wait_for_answer(state: InterviewState) -> dict:
         print("[wait_for_answer] ⛔ Already terminated — returning immediately")
         return {"user_answer": "", "timeout": True}
 
-    interview_id  = state.get("interview_id")
-    answer_key    = f"interview:{interview_id}:latest_answer"
-    end_key       = f"interview:{interview_id}:ended"
+    interview_id = state.get("interview_id")
+    answer_key = f"interview:{interview_id}:latest_answer"
+    end_key = f"interview:{interview_id}:ended"
     ready_channel = f"interview:{interview_id}:answer_ready"
-    timeout       = 240
+    timeout = 240
 
     # Check persistent end flag before subscribing (race-condition guard)
     if client.exists(end_key):
@@ -829,7 +966,7 @@ def wait_for_answer(state: InterviewState) -> dict:
             return {"user_answer": "", "timeout": True}
         return {"user_answer": answer, "timeout": False}
 
-    sub   = client.pubsub()
+    sub = client.pubsub()
     sub.subscribe(ready_channel)
     start = time.time()
 
@@ -870,9 +1007,10 @@ def wait_for_answer(state: InterviewState) -> dict:
 # NODE 5: EVALUATE ANSWER  (comparative, strict)
 # ─────────────────────────────────────────────
 
+
 def evaluate_answer(state: InterviewState) -> dict:
     """
-    COMPARATIVE evaluation: user_answer is measured against expected_answer.
+    NODE 5: COMPARATIVE evaluation: user_answer is measured against expected_answer.
     Scoring is strict:
       - No generic praise.
       - Missing concepts are named explicitly.
@@ -880,27 +1018,27 @@ def evaluate_answer(state: InterviewState) -> dict:
     """
     print("[evaluate_answer] started")
 
-    question        = state.get("current_question", "")
-    answer          = state.get("user_answer", "")
+    question = state.get("current_question", "")
+    answer = state.get("user_answer", "")
     expected_answer = state.get("expected_answer") or {}
-    role            = state.get("role") or "Software Engineer"
-    difficulty      = state.get("difficulty", "medium")
-    interview_type  = state.get("interview_type", "technical")
-    skills          = [str(s) for s in (state.get("skills") or []) if s is not None]
-    timed_out       = state.get("timeout", False)
+    role = state.get("role") or "Software Engineer"
+    difficulty = state.get("difficulty", "medium")
+    interview_type = state.get("interview_type", "technical")
+    skills = [str(s) for s in (state.get("skills") or []) if s is not None]
+    timed_out = state.get("timeout", False)
     is_support_turn = state.get("is_support_turn", False)
 
     _empty = {
-        "score":             0,
-        "confidence":        0.0,
-        "dimensions":        {},
-        "missing_concepts":  [],
-        "incorrect_points":  [],
-        "strengths":         [],
-        "weaknesses":        [],
-        "verdict":           "No answer was provided.",
-        "feedback":          "No answer was provided.",
-        "followup":          False,
+        "score": 0,
+        "confidence": 0.0,
+        "dimensions": {},
+        "missing_concepts": [],
+        "incorrect_points": [],
+        "strengths": [],
+        "weaknesses": [],
+        "verdict": "No answer was provided.",
+        "feedback": "No answer was provided.",
+        "followup": False,
         "followup_question": "",
     }
 
@@ -911,22 +1049,22 @@ def evaluate_answer(state: InterviewState) -> dict:
     if is_support_turn:
         print("[evaluate_answer] Skipping — support turn")
         return {
-            "score":             state.get("score", 0),
-            "confidence":        state.get("confidence", 0.0),
-            "dimensions":        state.get("dimensions", {}),
-            "missing_concepts":  state.get("missing_concepts", []),
-            "incorrect_points":  state.get("incorrect_points", []),
-            "strengths":         state.get("strengths", []),
-            "weaknesses":        state.get("weaknesses", []),
-            "verdict":           state.get("verdict", ""),
-            "feedback":          state.get("feedback", ""),
-            "followup":          False,
+            "score": state.get("score", 0),
+            "confidence": state.get("confidence", 0.0),
+            "dimensions": state.get("dimensions", {}),
+            "missing_concepts": state.get("missing_concepts", []),
+            "incorrect_points": state.get("incorrect_points", []),
+            "strengths": state.get("strengths", []),
+            "weaknesses": state.get("weaknesses", []),
+            "verdict": state.get("verdict", ""),
+            "feedback": state.get("feedback", ""),
+            "followup": False,
             "followup_question": "",
         }
 
     human_round = is_human_round(interview_type)
 
-    key_concepts_text    = json.dumps(expected_answer.get("key_concepts", []))
+    key_concepts_text = json.dumps(expected_answer.get("key_concepts", []))
     reasoning_steps_text = json.dumps(expected_answer.get("reasoning_steps", []))
     ideal_structure_text = expected_answer.get("ideal_structure", "Not specified")
     common_mistakes_text = json.dumps(expected_answer.get("common_mistakes", []))
@@ -1061,14 +1199,16 @@ Return ONLY valid JSON — no markdown, no extra keys:
 
     try:
         result_text = llm_eval.invoke([HumanMessage(content=eval_prompt)]).content
-        parsed      = safe_json_parse(result_text)
+        parsed = safe_json_parse(result_text)
 
         # ── DETERMINISTIC POST-PROCESSING ─────────────────────────────────
-        raw_score       = max(0, min(10, int(parsed.get("score", 0))))
+        raw_score = max(0, min(10, int(parsed.get("score", 0))))
         missing_concepts = [str(c) for c in parsed.get("missing_concepts", []) if c]
 
         # Apply difficulty-aware cap — LLM cannot override this
-        final_score = apply_difficulty_scoring_cap(raw_score, missing_concepts, difficulty)
+        final_score = apply_difficulty_scoring_cap(
+            raw_score, missing_concepts, difficulty
+        )
 
         confidence = max(0.0, min(1.0, float(parsed.get("confidence", 0.5))))
 
@@ -1083,32 +1223,34 @@ Return ONLY valid JSON — no markdown, no extra keys:
         verdict = str(parsed.get("verdict", "")).strip()
 
         result = {
-            "score":             final_score,
-            "confidence":        confidence,
-            "dimensions":        dimensions,
-            "missing_concepts":  missing_concepts,
-            "incorrect_points":  [str(p) for p in parsed.get("incorrect_points", []) if p],
-            "strengths":         [str(s) for s in parsed.get("strengths", []) if s],
-            "weaknesses":        [str(w) for w in parsed.get("weaknesses", []) if w],
-            "verdict":           verdict,
-            "feedback":          verdict,   # backward-compat alias
-            "followup":          bool(parsed.get("followup", False)),
+            "score": final_score,
+            "confidence": confidence,
+            "dimensions": dimensions,
+            "missing_concepts": missing_concepts,
+            "incorrect_points": [
+                str(p) for p in parsed.get("incorrect_points", []) if p
+            ],
+            "strengths": [str(s) for s in parsed.get("strengths", []) if s],
+            "weaknesses": [str(w) for w in parsed.get("weaknesses", []) if w],
+            "verdict": verdict,
+            "feedback": verdict,  # backward-compat alias
+            "followup": bool(parsed.get("followup", False)),
             "followup_question": str(parsed.get("followup_question", "")),
         }
 
     except Exception as e:
         print(f"[evaluate_answer] Parse error: {e}")
         result = {
-            "score":             0,
-            "confidence":        0.0,
-            "dimensions":        {},
-            "missing_concepts":  [],
-            "incorrect_points":  [],
-            "strengths":         [],
-            "weaknesses":        ["Evaluation failed — answer could not be processed."],
-            "verdict":           "Evaluation error.",
-            "feedback":          "Evaluation error.",
-            "followup":          False,
+            "score": 0,
+            "confidence": 0.0,
+            "dimensions": {},
+            "missing_concepts": [],
+            "incorrect_points": [],
+            "strengths": [],
+            "weaknesses": ["Evaluation failed — answer could not be processed."],
+            "verdict": "Evaluation error.",
+            "feedback": "Evaluation error.",
+            "followup": False,
             "followup_question": "",
         }
 
@@ -1124,59 +1266,60 @@ Return ONLY valid JSON — no markdown, no extra keys:
 # NODE 6: STORE STEP  (full structured data)
 # ─────────────────────────────────────────────
 
+
 def store_step(state: InterviewState) -> dict:
     """
-    Stores the FULL structured interview step — not just score + feedback.
+    NODE 6: Stores the FULL structured interview step — not just score + feedback.
     Includes expected_answer, dimensional breakdown, and comparative analysis.
     """
     print("[store_step] started")
 
-    interview_id     = state.get("interview_id")
+    interview_id = state.get("interview_id")
     question_history = state.get("question_history", [])
-    current_index    = state.get("current_index", 1)
-    is_support_turn  = state.get("is_support_turn", False)
+    current_index = state.get("current_index", 1)
+    is_support_turn = state.get("is_support_turn", False)
 
     if is_support_turn:
         print("[store_step] Skipping — support turn")
         return {
-            "question_history":  question_history,
-            "followup":          False,
+            "question_history": question_history,
+            "followup": False,
             "followup_question": "",
-            "current_index":     current_index,
-            "is_support_turn":   False,
+            "current_index": current_index,
+            "is_support_turn": False,
         }
 
     if _is_terminated(state):
         print("[store_step] ⛔ Terminated — skipping")
         return {
-            "question_history":  question_history,
-            "followup":          False,
+            "question_history": question_history,
+            "followup": False,
             "followup_question": "",
-            "current_index":     current_index,
-            "is_support_turn":   False,
-            "timeout":           True,
+            "current_index": current_index,
+            "is_support_turn": False,
+            "timeout": True,
         }
 
     history_index = current_index - 1
 
     # Full structured entry — every field the evaluation produced
     entry = {
-        "index":             history_index,
-        "question":          state.get("current_question", ""),
-        "expected_answer":   state.get("expected_answer", {}),
-        "user_answer":       state.get("user_answer", ""),
-        "score":             state.get("score", 0),
-        "confidence":        state.get("confidence", 0.0),
-        "dimensions":        state.get("dimensions", {}),
-        "missing_concepts":  state.get("missing_concepts", []),
-        "incorrect_points":  state.get("incorrect_points", []),
-        "strengths":         state.get("strengths", []),
-        "weaknesses":        state.get("weaknesses", []),
-        "verdict":           state.get("verdict", ""),
-        "difficulty":        state.get("difficulty", "unknown"),
-        "followup":          state.get("followup", False),
+        "index": history_index,
+        "question": state.get("current_question", ""),
+        "expected_answer": state.get("expected_answer", {}),
+        "user_answer": state.get("user_answer", ""),
+        "score": state.get("score", 0),
+        "confidence": state.get("confidence", 0.0),
+        "dimensions": state.get("dimensions", {}),
+        "missing_concepts": state.get("missing_concepts", []),
+        "incorrect_points": state.get("incorrect_points", []),
+        "strengths": state.get("strengths", []),
+        "weaknesses": state.get("weaknesses", []),
+        "verdict": state.get("verdict", ""),
+        "difficulty": state.get("difficulty", "unknown"),
+        "followup": state.get("followup", False),
         "followup_question": state.get("followup_question", ""),
-        "timestamp":         int(time.time()),
+        "timestamp": int(time.time()),
     }
 
     client.rpush(f"interview:{interview_id}:history", json.dumps(entry))
@@ -1184,15 +1327,17 @@ def store_step(state: InterviewState) -> dict:
     # Update in-memory history for finalize
     updated_history = list(question_history)
     if updated_history and updated_history[-1].get("index") == history_index:
-        updated_history[-1].update({
-            "answer":          entry["user_answer"],
-            "score":           entry["score"],
-            "dimensions":      entry["dimensions"],
-            "missing_concepts": entry["missing_concepts"],
-            "strengths":       entry["strengths"],
-            "weaknesses":      entry["weaknesses"],
-            "verdict":         entry["verdict"],
-        })
+        updated_history[-1].update(
+            {
+                "answer": entry["user_answer"],
+                "score": entry["score"],
+                "dimensions": entry["dimensions"],
+                "missing_concepts": entry["missing_concepts"],
+                "strengths": entry["strengths"],
+                "weaknesses": entry["weaknesses"],
+                "verdict": entry["verdict"],
+            }
+        )
 
     print(
         f"[store_step] Stored step #{history_index} | "
@@ -1200,11 +1345,11 @@ def store_step(state: InterviewState) -> dict:
     )
 
     return {
-        "question_history":  updated_history,
-        "followup":          False,
+        "question_history": updated_history,
+        "followup": False,
         "followup_question": "",
-        "current_index":     current_index,
-        "is_support_turn":   False,
+        "current_index": current_index,
+        "is_support_turn": False,
     }
 
 
@@ -1212,14 +1357,15 @@ def store_step(state: InterviewState) -> dict:
 # NODE 7: CHECK CONTINUE
 # ─────────────────────────────────────────────
 
+
 def check_continue(state: InterviewState) -> dict:
     print("[check_continue] started")
 
-    current_index   = state.get("current_index", 0)
-    description     = state.get("description") or ""
-    max_questions   = resolve_max_questions(description)
+    current_index = state.get("current_index", 0)
+    description = state.get("description") or ""
+    max_questions = resolve_max_questions(description)
     is_support_turn = state.get("is_support_turn", False)
-    timed_out       = bool(state.get("timeout"))
+    timed_out = bool(state.get("timeout"))
 
     print(
         f"[check_continue] index={current_index}, max={max_questions}, "
@@ -1245,9 +1391,30 @@ def check_continue(state: InterviewState) -> dict:
 # ─────────────────────────────────────────────
 
 SKILL_SCORE_DIMENSIONS = {
-    "behavioral": ["Communication", "Self-Awareness", "Leadership", "Conflict Resolution", "Adaptability", "Teamwork"],
-    "hr":         ["Communication", "Professionalism", "Culture Fit", "Motivation", "Self-Awareness", "Negotiation Readiness"],
-    "default":    ["Communication", "Technical Depth", "Problem Solving", "Clarity", "Domain Knowledge", "Confidence"],
+    "behavioral": [
+        "Communication",
+        "Self-Awareness",
+        "Leadership",
+        "Conflict Resolution",
+        "Adaptability",
+        "Teamwork",
+    ],
+    "hr": [
+        "Communication",
+        "Professionalism",
+        "Culture Fit",
+        "Motivation",
+        "Self-Awareness",
+        "Negotiation Readiness",
+    ],
+    "default": [
+        "Communication",
+        "Technical Depth",
+        "Problem Solving",
+        "Clarity",
+        "Domain Knowledge",
+        "Confidence",
+    ],
 }
 
 
@@ -1259,30 +1426,44 @@ def get_skill_dimensions(interview_type: str) -> List[str]:
 def _compute_deterministic_summary(
     history: List[Dict[str, Any]],
     interview_type: str,
+    interruption_count: int = 0,
 ) -> Dict[str, Any]:
     """
-    STEP 1 — pure deterministic computation.
+    PATCH 7 & 8: STEP 1 — pure deterministic computation.
     No LLM involved. Returns a structured facts dict that the LLM
     in step 2 will narrate (but cannot contradict or invent).
+
+    Now includes interruption penalty calculation.
     """
     if not history:
         return {}
 
     # ── Score aggregation ──────────────────────────────────────────────────
-    raw_scores    = [float(h.get("score", 0)) for h in history]
-    plain_avg     = round(sum(raw_scores) / len(raw_scores), 2) if raw_scores else 0.0
+    raw_scores = [float(h.get("score", 0)) for h in history]
+    plain_avg = round(sum(raw_scores) / len(raw_scores), 2) if raw_scores else 0.0
 
     # Difficulty-weighted average
-    weighted_sum  = sum(
-        float(h.get("score", 0)) * DIFFICULTY_WEIGHTS.get(h.get("difficulty", "medium"), 1.0)
+    weighted_sum = sum(
+        float(h.get("score", 0))
+        * DIFFICULTY_WEIGHTS.get(h.get("difficulty", "medium"), 1.0)
         for h in history
     )
-    total_weight  = sum(
-        DIFFICULTY_WEIGHTS.get(h.get("difficulty", "medium"), 1.0)
-        for h in history
+    total_weight = sum(
+        DIFFICULTY_WEIGHTS.get(h.get("difficulty", "medium"), 1.0) for h in history
     )
-    weighted_avg  = round(weighted_sum / total_weight, 2) if total_weight > 0 else plain_avg
-    overall_100   = round(weighted_avg * 10)
+    weighted_avg = (
+        round(weighted_sum / total_weight, 2) if total_weight > 0 else plain_avg
+    )
+
+    # ── PATCH 7: Interruption penalty ──────────────────────────────────────
+    FREE_INTERRUPTIONS = 1  # first one is forgiven
+    PENALTY_PER_EXTRA = 0.1  # 0.1 off the 0-10 weighted avg per excess interruption
+    MAX_PENALTY = 1.0  # never deduct more than 1 full point (10 on 100-pt scale)
+
+    excess = max(0, interruption_count - FREE_INTERRUPTIONS)
+    int_penalty = min(MAX_PENALTY, excess * PENALTY_PER_EXTRA)
+    weighted_avg = round(max(0.0, weighted_avg - int_penalty), 2)
+    overall_100 = round(weighted_avg * 10)
 
     # ── Recommendation (hard rule — no LLM) ───────────────────────────────
     if weighted_avg >= 8.0:
@@ -1295,17 +1476,17 @@ def _compute_deterministic_summary(
         recommendation = "No Hire"
 
     # ── Aggregated strengths / weaknesses ─────────────────────────────────
-    all_strengths:  List[str] = []
+    all_strengths: List[str] = []
     all_weaknesses: List[str] = []
 
     for h in history:
         all_strengths.extend(h.get("strengths", []))
         all_weaknesses.extend(h.get("weaknesses", []))
 
-    strength_counts  = Counter(all_strengths)
-    weakness_counts  = Counter(all_weaknesses)
-    top_strengths    = [s for s, _ in strength_counts.most_common(5)]
-    top_weaknesses   = [w for w, _ in weakness_counts.most_common(5)]
+    strength_counts = Counter(all_strengths)
+    weakness_counts = Counter(all_weaknesses)
+    top_strengths = [s for s, _ in strength_counts.most_common(5)]
+    top_weaknesses = [w for w, _ in weakness_counts.most_common(5)]
 
     # ── Gap analysis ───────────────────────────────────────────────────────
     gap_data = compute_gap_analysis(history)
@@ -1317,22 +1498,21 @@ def _compute_deterministic_summary(
             dimension_totals.setdefault(dim, []).append(float(val))
 
     dim_averages = {
-        dim: round(sum(vals) / len(vals), 1)
-        for dim, vals in dimension_totals.items()
+        dim: round(sum(vals) / len(vals), 1) for dim, vals in dimension_totals.items()
     }
 
     # ── Per-question score summary ─────────────────────────────────────────
     question_scores = [
         {
-            "index":            h.get("index", i),
-            "score":            round(float(h.get("score", 0)) * 10),   # 0–100
-            "difficulty":       h.get("difficulty", "unknown"),
-            "question":         h.get("question", ""),
-            "verdict":          h.get("verdict", ""),
+            "index": h.get("index", i),
+            "score": round(float(h.get("score", 0)) * 10),  # 0–100
+            "difficulty": h.get("difficulty", "unknown"),
+            "question": h.get("question", ""),
+            "verdict": h.get("verdict", ""),
             "missing_concepts": h.get("missing_concepts", []),
-            "strengths":        h.get("strengths", []),
-            "weaknesses":       h.get("weaknesses", []),
-            "timestamp":        h.get("timestamp", 0),
+            "strengths": h.get("strengths", []),
+            "weaknesses": h.get("weaknesses", []),
+            "timestamp": h.get("timestamp", 0),
         }
         for i, h in enumerate(history)
     ]
@@ -1342,13 +1522,13 @@ def _compute_deterministic_summary(
     # Map LLM dimension keys → display skill names (best-effort)
     dim_key_map = {
         # technical
-        "correctness":     "Technical Depth",
-        "depth":           "Technical Depth",
-        "clarity":         "Clarity",
-        "communication":   "Communication",
+        "correctness": "Technical Depth",
+        "depth": "Technical Depth",
+        "clarity": "Clarity",
+        "communication": "Communication",
         # behavioral
-        "star_structure":  "Communication",
-        "self_awareness":  "Self-Awareness",
+        "star_structure": "Communication",
+        "self_awareness": "Self-Awareness",
     }
     skill_scores: Dict[str, int] = {}
     for dim_key, avg in dim_averages.items():
@@ -1362,71 +1542,119 @@ def _compute_deterministic_summary(
             skill_scores[dim] = overall_100
 
     return {
-        "plain_avg":        plain_avg,
-        "weighted_avg":     weighted_avg,
-        "overall_100":      overall_100,
-        "recommendation":   recommendation,
-        "top_strengths":    top_strengths,
-        "top_weaknesses":   top_weaknesses,
-        "repeated_gaps":    gap_data["repeated_gaps"],
-        "all_gaps":         gap_data["all_gaps"],
-        "gap_frequency":    gap_data["gap_frequency"],
-        "weak_dimensions":  gap_data["weak_dimensions"],
-        "dim_averages":     dim_averages,
-        "skill_scores":     skill_scores,
-        "question_scores":  question_scores,
+        "plain_avg": plain_avg,
+        "weighted_avg": weighted_avg,
+        "overall_100": overall_100,
+        "recommendation": recommendation,
+        "top_strengths": top_strengths,
+        "top_weaknesses": top_weaknesses,
+        "repeated_gaps": gap_data["repeated_gaps"],
+        "all_gaps": gap_data["all_gaps"],
+        "gap_frequency": gap_data["gap_frequency"],
+        "weak_dimensions": gap_data["weak_dimensions"],
+        "dim_averages": dim_averages,
+        "skill_scores": skill_scores,
+        "question_scores": question_scores,
     }
 
 
 def finalize(state: InterviewState) -> dict:
+    """
+    NODE 8: PATCH 5 — Read integrity fields from Redis.
+    PATCH 6 — Include them in narration_prompt.
+    PATCH 8 — Pass interruption_count to _compute_deterministic_summary.
+    PATCH 9 — Include end_reason + interruption note in Mem0 memory text.
+    """
     print("[finalize] started")
 
-    interview_id     = state.get("interview_id")
-    user_id          = state.get("user_id")
-    role             = state.get("role") or "Software Engineer"
-    interview_type   = state.get("interview_type", "technical")
-    candidate_name   = state.get("candidate_name", "the candidate")
-    start_time       = state.get("start_time", int(time.time()))
-    description      = state.get("description") or ""
+    interview_id = state.get("interview_id")
+    user_id = state.get("user_id")
+    role = state.get("role") or "Software Engineer"
+    interview_type = state.get("interview_type", "technical")
+    candidate_name = state.get("candidate_name", "the candidate")
+    start_time = state.get("start_time", int(time.time()))
+    description = state.get("description") or ""
     duration_seconds = int(time.time()) - start_time
 
-    human_round              = is_human_round(interview_type)
-    custom_config            = parse_custom_config(description)
+    human_round = is_human_round(interview_type)
+    custom_config = parse_custom_config(description)
     custom_topics: List[str] = custom_config.get("topics", [])
     difficulty_override: str = custom_config.get("difficulty_override", "")
 
     # Load full history from Redis
     raw_history = client.lrange(f"interview:{interview_id}:history", 0, -1)
-    history     = [json.loads(h) for h in raw_history]
+    history = [json.loads(h) for h in raw_history]
+
+    # ── PATCH 5: Read integrity fields from Redis ──────────────────────────
+    def _redis_int(key: str, fallback: int = 0) -> int:
+        raw = client.get(key)
+        if raw is None:
+            return fallback
+        try:
+            return int(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        except (ValueError, AttributeError):
+            return fallback
+
+    def _redis_str(key: str, fallback: str = "") -> str:
+        raw = client.get(key)
+        if raw is None:
+            return fallback
+        return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+
+    interruption_count = _redis_int(
+        f"interview:{interview_id}:interruptions", state.get("interruption_count", 0)
+    )
+    end_reason = _redis_str(
+        f"interview:{interview_id}:end_reason", state.get("end_reason", "completed")
+    )
+    recorded_duration = _redis_int(
+        f"interview:{interview_id}:duration_sec", duration_seconds
+    )
+
+    # If the session ended early (not 'completed'), override the duration
+    # with whatever the frontend reported — it's more accurate.
+    if end_reason != "completed" and recorded_duration > 0:
+        duration_seconds = recorded_duration
+
+    is_early_exit = end_reason != "completed"
+    print(
+        f"[finalize] end_reason={end_reason} interruptions={interruption_count} early_exit={is_early_exit}"
+    )
 
     if not history:
         summary_payload = {
-            "role":             role,
-            "interview_type":   interview_type,
-            "candidate_name":   candidate_name,
-            "date_iso":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "role": role,
+            "interview_type": interview_type,
+            "candidate_name": candidate_name,
+            "date_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "duration_seconds": duration_seconds,
-            "overall_score":    0,
-            "recommendation":   "Insufficient data",
-            "summary":          "No questions were answered.",
-            "what_went_right":  [],
-            "what_went_wrong":  [],
-            "strengths":        [],
-            "weaknesses":       [],
-            "tips":             [],
-            "skill_scores":     {},
-            "question_scores":  [],
-            "gap_analysis":     {},
+            "overall_score": 0,
+            "recommendation": "Insufficient data",
+            "summary": "No questions were answered.",
+            "what_went_right": [],
+            "what_went_wrong": [],
+            "strengths": [],
+            "weaknesses": [],
+            "tips": [],
+            "skill_scores": {},
+            "question_scores": [],
+            # ── PATCH 5: Add integrity fields to empty-history branch ──────
+            "end_reason": end_reason if "end_reason" in dir() else "user_ended",
+            "is_early_exit": True,
+            "interruption_count": 0,
         }
     else:
         # ──────────────────────────────────────────────────────────────────
         # STEP 1 — DETERMINISTIC COMPUTATION
         # ──────────────────────────────────────────────────────────────────
-        facts = _compute_deterministic_summary(history, interview_type)
+        # PATCH 8: Pass interruption_count to the helper
+        facts = _compute_deterministic_summary(
+            history, interview_type, interruption_count
+        )
 
-        overall_100    = facts["overall_100"]
+        overall_100 = facts["overall_100"]
         recommendation = facts["recommendation"]
-        skill_scores   = facts["skill_scores"]
+        skill_scores = facts["skill_scores"]
         question_scores = facts["question_scores"]
 
         extra_context = ""
@@ -1454,6 +1682,7 @@ def finalize(state: InterviewState) -> dict:
                 f"Missing: {', '.join(h.get('missing_concepts',[]) or []) or 'none'}\n\n"
             )
 
+        # ── PATCH 6: Include end_reason + interruptions in narration_prompt ────
         narration_prompt = f"""You are writing a post-interview report for a candidate.
 You MUST narrate ONLY the facts provided below. Do NOT invent, inflate, or soften anything.
 Use "you" when addressing the candidate. Be direct. No filler phrases.
@@ -1467,6 +1696,8 @@ COMPUTED FACTS (authoritative — do not contradict):
 - Repeated gaps (missed in 2+ questions): {json.dumps(facts['repeated_gaps'])}
 - Weak dimensions (avg < 5): {json.dumps(facts['weak_dimensions'])}
 - Dimension averages: {json.dumps(facts['dim_averages'])}
+- End reason: {end_reason}{"  ⚠️  EARLY EXIT — candidate left before completing all questions." if is_early_exit else ""}
+- AI interruptions: {interruption_count} times the candidate spoke over the AI mid-answer
 {extra_context}
 
 Full Q&A with verdicts:
@@ -1496,50 +1727,62 @@ Rules:
 - Every point in what_went_right/wrong MUST reference something from the actual Q&A.
 - Tips must start with a verb (Always..., Lead with..., Practice..., Study...).
 - No bullet characters inside strings. No markdown.
+- If end_reason is NOT 'completed', the first sentence of "summary" MUST note that the session ended early.
+- If interruption_count > 2, include it as a weakness point in what_went_wrong.
 - Do not use "good job", "great answer", "nice work", "the candidate".
 """
 
         try:
-            result_text = llm_summary.invoke([HumanMessage(content=narration_prompt)]).content
-            narrated    = safe_json_parse(result_text)
+            result_text = llm_summary.invoke(
+                [HumanMessage(content=narration_prompt)]
+            ).content
+            narrated = safe_json_parse(result_text)
 
             def clean_points(raw: Any) -> List[Dict[str, str]]:
                 if not isinstance(raw, list):
                     return []
                 return [
-                    {"point": str(item.get("point", "")), "tag": str(item.get("tag", "General"))}
-                    for item in raw if isinstance(item, dict) and item.get("point")
+                    {
+                        "point": str(item.get("point", "")),
+                        "tag": str(item.get("tag", "General")),
+                    }
+                    for item in raw
+                    if isinstance(item, dict) and item.get("point")
                 ]
 
             what_went_right = clean_points(narrated.get("what_went_right", []))
             what_went_wrong = clean_points(narrated.get("what_went_wrong", []))
 
             summary_payload = {
-                "role":             role,
-                "interview_type":   interview_type,
-                "candidate_name":   candidate_name,
-                "date_iso":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "role": role,
+                "interview_type": interview_type,
+                "candidate_name": candidate_name,
+                "date_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "duration_seconds": duration_seconds,
                 # ── Scores from deterministic step — LLM cannot touch these ──
-                "overall_score":    overall_100,
-                "recommendation":   recommendation,
-                "skill_scores":     skill_scores,
-                "question_scores":  question_scores,
+                "overall_score": overall_100,
+                "recommendation": recommendation,
+                "skill_scores": skill_scores,
+                "question_scores": question_scores,
                 # ── Narrated content from LLM step ───────────────────────────
-                "summary":          str(narrated.get("summary", "")),
-                "what_went_right":  what_went_right,
-                "what_went_wrong":  what_went_wrong,
-                "tips":             [str(t) for t in narrated.get("tips", []) if t],
+                "summary": str(narrated.get("summary", "")),
+                "what_went_right": what_went_right,
+                "what_went_wrong": what_went_wrong,
+                "tips": [str(t) for t in narrated.get("tips", []) if t],
                 # ── Backward-compat aliases ───────────────────────────────────
-                "strengths":        [p["point"] for p in what_went_right],
-                "weaknesses":       [p["point"] for p in what_went_wrong],
+                "strengths": [p["point"] for p in what_went_right],
+                "weaknesses": [p["point"] for p in what_went_wrong],
+                # ── PATCH 5: Integrity fields in normal branch ───────────────
+                "end_reason": end_reason,
+                "is_early_exit": is_early_exit,
+                "interruption_count": interruption_count,
                 # ── Gap analysis (deterministic, always included) ─────────────
                 "gap_analysis": {
-                    "repeated_gaps":    facts["repeated_gaps"],
-                    "all_gaps":         facts["all_gaps"],
-                    "gap_frequency":    facts["gap_frequency"],
-                    "weak_dimensions":  facts["weak_dimensions"],
-                    "dim_averages":     facts["dim_averages"],
+                    "repeated_gaps": facts["repeated_gaps"],
+                    "all_gaps": facts["all_gaps"],
+                    "gap_frequency": facts["gap_frequency"],
+                    "weak_dimensions": facts["weak_dimensions"],
+                    "dim_averages": facts["dim_averages"],
                 },
             }
 
@@ -1547,30 +1790,37 @@ Rules:
             print(f"[finalize] LLM narration error: {e}")
             # Fall back to deterministic-only summary — no LLM needed
             summary_payload = {
-                "role":             role,
-                "interview_type":   interview_type,
-                "candidate_name":   candidate_name,
-                "date_iso":         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "role": role,
+                "interview_type": interview_type,
+                "candidate_name": candidate_name,
+                "date_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "duration_seconds": duration_seconds,
-                "overall_score":    overall_100,
-                "recommendation":   recommendation,
-                "skill_scores":     skill_scores,
-                "question_scores":  question_scores,
-                "summary":          (
+                "overall_score": overall_100,
+                "recommendation": recommendation,
+                "skill_scores": skill_scores,
+                "question_scores": question_scores,
+                "summary": (
                     f"Interview completed with a weighted score of {facts['weighted_avg']}/10. "
                     f"Repeated gaps: {', '.join(facts['repeated_gaps']) or 'none identified'}."
                 ),
-                "what_went_right":  [{"point": s, "tag": "Core"} for s in facts["top_strengths"][:3]],
-                "what_went_wrong":  [{"point": w, "tag": "Gap"} for w in facts["top_weaknesses"][:3]],
-                "strengths":        facts["top_strengths"][:3],
-                "weaknesses":       facts["top_weaknesses"][:3],
-                "tips":             [],
+                "what_went_right": [
+                    {"point": s, "tag": "Core"} for s in facts["top_strengths"][:3]
+                ],
+                "what_went_wrong": [
+                    {"point": w, "tag": "Gap"} for w in facts["top_weaknesses"][:3]
+                ],
+                "strengths": facts["top_strengths"][:3],
+                "weaknesses": facts["top_weaknesses"][:3],
+                "tips": [],
+                "end_reason": end_reason,
+                "is_early_exit": is_early_exit,
+                "interruption_count": interruption_count,
                 "gap_analysis": {
-                    "repeated_gaps":   facts["repeated_gaps"],
-                    "all_gaps":        facts["all_gaps"],
-                    "gap_frequency":   facts["gap_frequency"],
+                    "repeated_gaps": facts["repeated_gaps"],
+                    "all_gaps": facts["all_gaps"],
+                    "gap_frequency": facts["gap_frequency"],
                     "weak_dimensions": facts["weak_dimensions"],
-                    "dim_averages":    facts["dim_averages"],
+                    "dim_averages": facts["dim_averages"],
                 },
             }
 
@@ -1588,17 +1838,32 @@ Rules:
     )
 
     # Store to Mem0 for future sessions
+    # ── PATCH 9: Include end_reason + interruption note ────────────────────
     try:
-        gap_str     = ", ".join(summary_payload.get("gap_analysis", {}).get("repeated_gaps", [])[:3]) or "none"
+        gap_str = (
+            ", ".join(
+                summary_payload.get("gap_analysis", {}).get("repeated_gaps", [])[:3]
+            )
+            or "none"
+        )
+
+        integrity_note = ""
+        if is_early_exit:
+            integrity_note = f" Session ended early ({end_reason})."
+        if interruption_count > 1:
+            integrity_note += f" Interrupted AI {interruption_count} times."
+
         memory_text = (
             f"Interview for {role} ({interview_type}): "
             f"Score {summary_payload['overall_score']}/100 — {recommendation}. "
             f"Summary: {summary_payload['summary']} "
-            f"Repeated gaps: {gap_str}."
+            f"Repeated gaps: {gap_str}.{integrity_note}"
         )
         memory_client.add(memory_text, user_id=user_id)
     except Exception as e:
         print(f"[finalize] Mem0 store error: {e}")
 
-    print(f"[finalize] Done. Score={summary_payload.get('overall_score')}/100 | {recommendation}")
+    print(
+        f"[finalize] Done. Score={summary_payload.get('overall_score')}/100 | {recommendation}"
+    )
     return {"summary": summary_payload}
