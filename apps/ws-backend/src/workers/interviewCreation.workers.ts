@@ -25,8 +25,8 @@ interface InterviewCompleteEvent {
         summary: string;
         strengths: string[];
         weaknesses: string[];
-        overall_score: number;   // 0-10
-        recommendation: "Hire" | "Strong Hire" | "No Hire" | "Needs More Evaluation";
+        overall_score: number;   // 0-100
+        recommendation: "Hire" | "Strong Hire" | "No Hire" | "Needs More Evaluation" | "Insufficient data";
     };
 }
 
@@ -95,7 +95,7 @@ subscriber.on("pmessage", async (pattern: string, channel: string, message: stri
             const { summary } = data as InterviewCompleteEvent;
 
             console.log(`[interview:${interviewId}] Interview complete`);
-            console.log(`  Score:          ${summary.overall_score}/10`);
+            console.log(`  Score:          ${summary.overall_score}/100`);
             console.log(`  Recommendation: ${summary.recommendation}`);
             console.log(`  Summary:        ${summary.summary}`);
             console.log(`  Strengths:      ${summary.strengths.join(", ")}`);

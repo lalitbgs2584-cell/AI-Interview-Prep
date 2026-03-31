@@ -6,9 +6,13 @@ Key changes vs original:
 NODE 2  generate_question   — returns {question, expected_answer} JSON in ONE LLM call.
                               expected_answer carries: key_concepts, reasoning_steps,
                               ideal_structure, common_mistakes.
+                              Prompt now enforces evidence anchoring + competency metadata
+                              (target_competency, difficulty_rationale, anti_repetition_key).
 
 NODE 5  evaluate_answer     — COMPARATIVE evaluation: user_answer vs expected_answer.
                               Returns full dimensional breakdown + missing concepts.
+                              Prompt now requires why_score_not_higher + transcript
+                              evidence_snippets for anchored scoring rationale.
                               Difficulty-aware scoring caps applied DETERMINISTICALLY
                               after LLM output (not left to LLM discretion).
 
@@ -22,6 +26,8 @@ NODE 8  finalize            — HYBRID:
                                   repeated patterns.
                                 Step 2 (LLM) — narrate computed facts into readable
                                   summary.  LLM cannot invent data it wasn't given.
+                              Narration now returns split summaries:
+                              content_quality, delivery_quality, interview_integrity.
 
 PATCH TRACKING:
 - PATCH 1: InterviewState TypedDict — 3 new integrity fields
@@ -39,7 +45,7 @@ import json
 import time
 import re
 from collections import Counter
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -51,6 +57,10 @@ from app.core.redis_client import client
 from app.core.config import settings
 from app.graph.state.interview_creation_state import InterviewState
 from app.core.mem0 import memory_client
+from app.graph.answer_analytics import (
+    compute_answer_analytics,
+    aggregate_interview_analytics,
+)
 
 
 # ─────────────────────────────────────────────
@@ -128,6 +138,32 @@ def get_candidate_name(resume_chunks: List[str]) -> str:
 
 def is_human_round(interview_type: str) -> bool:
     return (interview_type or "").strip().lower() in HUMAN_INTERVIEW_TYPES
+
+
+def parse_answer_payload(raw_answer: str) -> Tuple[str, Dict[str, Any]]:
+    """
+    Backward-compatible parsing for candidate answer payloads.
+    Legacy payload: plain string answer.
+    New payload: JSON object {"text": "...", "analytics": {...}}.
+    """
+    if not raw_answer:
+        return "", {}
+    if raw_answer == "__END__":
+        return "__END__", {}
+
+    try:
+        maybe_json = json.loads(raw_answer)
+    except Exception:
+        return raw_answer, {}
+
+    if isinstance(maybe_json, dict):
+        text = str(maybe_json.get("text", "")).strip()
+        analytics = maybe_json.get("analytics", {})
+        if not text and isinstance(maybe_json.get("answer"), str):
+            text = maybe_json.get("answer", "").strip()
+        return text, analytics if isinstance(analytics, dict) else {}
+
+    return raw_answer, {}
 
 
 def _is_terminated(state: InterviewState) -> bool:
@@ -573,11 +609,23 @@ def load_context(state: InterviewState) -> dict:
         "candidate_name": candidate_name,
         "current_index": 0,
         "question_history": [],
+        "target_competency": "",
+        "difficulty_rationale": "",
+        "anti_repetition_key": "",
+        "question_evidence_anchor": "",
         "start_time": int(time.time()),
         "consecutive_struggles": 0,
         "is_support_turn": False,
         "timeout": False,
         "gap_map": {},
+        "response_analytics": {},
+        "response_analytics_metrics": {},
+        "score_pillars": {
+            "content_score": 0,
+            "delivery_score": 0,
+            "confidence_score": 0,
+            "communication_flow_score": 0,
+        },
         # ── PATCH 2: Initialize new integrity fields ──────────────────────
         "interruption_count": 0,
         "end_reason": "user_ended",
@@ -618,6 +666,10 @@ def generate_question(state: InterviewState) -> dict:
         return {
             "current_question": "",
             "expected_answer": {},
+            "target_competency": "",
+            "difficulty_rationale": "",
+            "anti_repetition_key": "",
+            "question_evidence_anchor": "",
             "question_history": question_history,
             "current_index": index,
             "difficulty": state.get("difficulty", "medium"),
@@ -663,6 +715,10 @@ def generate_question(state: InterviewState) -> dict:
         return {
             "current_question": supportive_text,
             "expected_answer": {},  # no expected answer for support turns
+            "target_competency": "supportive_scaffolding",
+            "difficulty_rationale": "Support turn triggered by uncertainty detection.",
+            "anti_repetition_key": "support-turn",
+            "question_evidence_anchor": "Detected uncertainty in the most recent candidate answer.",
             "question_history": question_history,
             "current_index": index + 1 if is_pivot else index,
             "difficulty": state.get("difficulty", "medium"),
@@ -708,7 +764,7 @@ def generate_question(state: InterviewState) -> dict:
         else ""
     )
 
-    # ── Build prompt — returns JSON with question + expected_answer ─────────
+    # ── Build prompt — returns JSON with question + expected_answer + anchors ─────────
     if human_round:
         system_prompt = f"""You are a strict {interview_type.upper()} interviewer for a {role} position.
 
@@ -727,10 +783,15 @@ ABSOLUTE RULES:
 1. ZERO technical content — no code, algorithms, systems, APIs, frameworks, databases.
 2. Output ONLY valid JSON — no markdown, no commentary, no preamble.
 3. The expected_answer must be specific to THIS question, not generic.
+4. Evidence anchoring is mandatory: include a quote-like anchor tied to resume/context/memory.
 
 Return ONLY this JSON:
 {{
   "question": "<the exact question to ask — one sentence, no numbering>",
+  "target_competency": "<single competency this question tests>",
+  "difficulty_rationale": "<why this is {difficulty.upper()} for this candidate>",
+  "anti_repetition_key": "<short stable key to avoid repeating this theme>",
+  "evidence_anchor": "<quote-like snippet from provided context that motivates this question>",
   "expected_answer": {{
     "key_concepts": ["<concept 1>", "<concept 2>", "<concept 3>"],
     "reasoning_steps": ["<STAR step 1>", "<STAR step 2>", "<STAR step 3>", "<STAR step 4>"],
@@ -758,10 +819,15 @@ RULES:
 2. The expected_answer must be specific to THIS question.
 3. key_concepts must be the EXACT technical concepts a correct answer requires.
 4. common_mistakes must name real misconceptions, not generic advice.
+5. Evidence anchoring is mandatory: include a quote-like anchor tied to resume/context/memory.
 
 Return ONLY this JSON:
 {{
   "question": "<the exact question to ask — one sentence, no numbering>",
+  "target_competency": "<single competency this question tests>",
+  "difficulty_rationale": "<why this is {difficulty.upper()} for this candidate>",
+  "anti_repetition_key": "<short stable key to avoid repeating this theme>",
+  "evidence_anchor": "<quote-like snippet from provided context that motivates this question>",
   "expected_answer": {{
     "key_concepts": ["<required concept 1>", "<required concept 2>", "<required concept 3>"],
     "reasoning_steps": ["<step 1>", "<step 2>", "<step 3>"],
@@ -772,6 +838,10 @@ Return ONLY this JSON:
 
     question = ""
     expected_answer = {}
+    target_competency = ""
+    difficulty_rationale = ""
+    anti_repetition_key = ""
+    question_evidence_anchor = ""
 
     try:
         response_text = llm.invoke(
@@ -780,6 +850,10 @@ Return ONLY this JSON:
         parsed = safe_json_parse(response_text)
         question = str(parsed.get("question", "")).strip()
         expected_answer = parsed.get("expected_answer", {})
+        target_competency = str(parsed.get("target_competency", "")).strip()
+        difficulty_rationale = str(parsed.get("difficulty_rationale", "")).strip()
+        anti_repetition_key = str(parsed.get("anti_repetition_key", "")).strip()
+        question_evidence_anchor = str(parsed.get("evidence_anchor", "")).strip()
 
         # Behavioral guard — re-generate if technical leakage detected
         if human_round:
@@ -825,6 +899,10 @@ Return ONLY this JSON:
                 parsed = safe_json_parse(response_text)
                 question = str(parsed.get("question", "")).strip()
                 expected_answer = parsed.get("expected_answer", {})
+                target_competency = str(parsed.get("target_competency", "")).strip()
+                difficulty_rationale = str(parsed.get("difficulty_rationale", "")).strip()
+                anti_repetition_key = str(parsed.get("anti_repetition_key", "")).strip()
+                question_evidence_anchor = str(parsed.get("evidence_anchor", "")).strip()
 
     except Exception as e:
         print(f"[generate_question] LLM/parse error: {e}")
@@ -869,10 +947,47 @@ Return ONLY this JSON:
                 "No personal contribution",
             ],
         }
+        target_competency = (
+            "behavioral_communication"
+            if human_round
+            else "technical_problem_solving"
+        )
+        difficulty_rationale = (
+            f"Fallback question chosen for {difficulty.upper()} after LLM parse failure."
+        )
+        anti_repetition_key = f"fallback-{difficulty}-{index}"
+        question_evidence_anchor = (
+            custom_topics[0]
+            if custom_topics
+            else (skills[0] if skills else "candidate profile context")
+        )
+
+    if not target_competency:
+        target_competency = (
+            "behavioral_communication"
+            if human_round
+            else "technical_problem_solving"
+        )
+    if not difficulty_rationale:
+        difficulty_rationale = (
+            f"This question is calibrated for {difficulty.upper()} based on prior turns and profile depth."
+        )
+    if not anti_repetition_key:
+        anti_repetition_key = f"{interview_type.lower()}-{difficulty}-q{index+1}"
+    if not question_evidence_anchor:
+        question_evidence_anchor = (
+            custom_topics[0]
+            if custom_topics
+            else (skills[0] if skills else "candidate profile context")
+        )
 
     entry = {
         "question": question,
         "expected_answer": expected_answer,
+        "target_competency": target_competency,
+        "difficulty_rationale": difficulty_rationale,
+        "anti_repetition_key": anti_repetition_key,
+        "evidence_anchor": question_evidence_anchor,
         "answer": "",
         "index": index,
         "difficulty": difficulty,
@@ -884,6 +999,10 @@ Return ONLY this JSON:
     return {
         "current_question": question,
         "expected_answer": expected_answer,
+        "target_competency": target_competency,
+        "difficulty_rationale": difficulty_rationale,
+        "anti_repetition_key": anti_repetition_key,
+        "question_evidence_anchor": question_evidence_anchor,
         "question_history": [*question_history, entry],
         "current_index": index + 1,
         "difficulty": difficulty,
@@ -944,7 +1063,7 @@ def wait_for_answer(state: InterviewState) -> dict:
 
     if _is_terminated(state):
         print("[wait_for_answer] ⛔ Already terminated — returning immediately")
-        return {"user_answer": "", "timeout": True}
+        return {"user_answer": "", "response_analytics": {}, "timeout": True}
 
     interview_id = state.get("interview_id")
     answer_key = f"interview:{interview_id}:latest_answer"
@@ -955,7 +1074,7 @@ def wait_for_answer(state: InterviewState) -> dict:
     # Check persistent end flag before subscribing (race-condition guard)
     if client.exists(end_key):
         print("[wait_for_answer] ⛔ End flag already set")
-        return {"user_answer": "", "timeout": True}
+        return {"user_answer": "", "response_analytics": {}, "timeout": True}
 
     # Drain any answer already in the key
     raw = client.get(answer_key)
@@ -963,8 +1082,13 @@ def wait_for_answer(state: InterviewState) -> dict:
         client.delete(answer_key)
         answer = raw.decode("utf-8") if isinstance(raw, bytes) else raw
         if answer == "__END__":
-            return {"user_answer": "", "timeout": True}
-        return {"user_answer": answer, "timeout": False}
+            return {"user_answer": "", "response_analytics": {}, "timeout": True}
+        answer_text, response_analytics = parse_answer_payload(answer)
+        return {
+            "user_answer": answer_text,
+            "response_analytics": response_analytics,
+            "timeout": False,
+        }
 
     sub = client.pubsub()
     sub.subscribe(ready_channel)
@@ -976,7 +1100,7 @@ def wait_for_answer(state: InterviewState) -> dict:
                 break
             if client.exists(end_key):
                 print("[wait_for_answer] ⛔ End flag detected during poll")
-                return {"user_answer": "", "timeout": True}
+                return {"user_answer": "", "response_analytics": {}, "timeout": True}
 
             message = sub.get_message(ignore_subscribe_messages=True, timeout=1.0)
             if message is None:
@@ -989,9 +1113,14 @@ def wait_for_answer(state: InterviewState) -> dict:
                 client.delete(answer_key)
                 answer = raw.decode("utf-8") if isinstance(raw, bytes) else raw
                 if answer == "__END__":
-                    return {"user_answer": "", "timeout": True}
+                    return {"user_answer": "", "response_analytics": {}, "timeout": True}
                 print(f"[wait_for_answer] Answer received: {answer[:80]}…")
-                return {"user_answer": answer, "timeout": False}
+                answer_text, response_analytics = parse_answer_payload(answer)
+                return {
+                    "user_answer": answer_text,
+                    "response_analytics": response_analytics,
+                    "timeout": False,
+                }
     finally:
         try:
             sub.unsubscribe(ready_channel)
@@ -1000,7 +1129,7 @@ def wait_for_answer(state: InterviewState) -> dict:
             pass
 
     print("[wait_for_answer] Timed out after 240s")
-    return {"user_answer": "", "timeout": True}
+    return {"user_answer": "", "response_analytics": {}, "timeout": True}
 
 
 # ─────────────────────────────────────────────
@@ -1027,6 +1156,11 @@ def evaluate_answer(state: InterviewState) -> dict:
     skills = [str(s) for s in (state.get("skills") or []) if s is not None]
     timed_out = state.get("timeout", False)
     is_support_turn = state.get("is_support_turn", False)
+    response_analytics = (
+        state.get("response_analytics", {})
+        if isinstance(state.get("response_analytics", {}), dict)
+        else {}
+    )
 
     _empty = {
         "score": 0,
@@ -1037,9 +1171,19 @@ def evaluate_answer(state: InterviewState) -> dict:
         "strengths": [],
         "weaknesses": [],
         "verdict": "No answer was provided.",
+        "why_score_not_higher": "No answer submitted, so higher score was not possible.",
+        "evidence_snippets": [],
         "feedback": "No answer was provided.",
         "followup": False,
         "followup_question": "",
+        "response_analytics": response_analytics,
+        "response_analytics_metrics": {},
+        "score_pillars": {
+            "content_score": 0,
+            "delivery_score": 0,
+            "confidence_score": 0,
+            "communication_flow_score": 0,
+        },
     }
 
     if timed_out or not answer.strip():
@@ -1057,9 +1201,14 @@ def evaluate_answer(state: InterviewState) -> dict:
             "strengths": state.get("strengths", []),
             "weaknesses": state.get("weaknesses", []),
             "verdict": state.get("verdict", ""),
+            "why_score_not_higher": state.get("why_score_not_higher", ""),
+            "evidence_snippets": state.get("evidence_snippets", []),
             "feedback": state.get("feedback", ""),
             "followup": False,
             "followup_question": "",
+            "response_analytics": state.get("response_analytics", {}),
+            "response_analytics_metrics": state.get("response_analytics_metrics", {}),
+            "score_pillars": state.get("score_pillars", {}),
         }
 
     human_round = is_human_round(interview_type)
@@ -1119,6 +1268,7 @@ General rules:
 - missing_concepts must list EXACTLY which key concepts were absent from the answer.
 - If the answer is vague and hits no concrete STAR element → score ≤ 4.
 - A score of 7+ requires clear Situation, Task, Action, AND Result with measurable impact.
+- Evidence anchoring is mandatory: include direct quote-like snippets from the transcript answer.
 
 Dimensions for behavioral evaluation:
 - star_structure (0-10): How well the STAR format was followed
@@ -1141,6 +1291,8 @@ Return ONLY valid JSON — no markdown, no extra keys:
   "strengths": ["<specific thing done well — under 15 words>", ...],
   "weaknesses": ["<specific gap — name what was missing — under 15 words>", ...],
   "verdict": "<1 sentence brutally honest summary of this answer>",
+  "why_score_not_higher": "<1-2 sentences naming exact missing pieces that prevented a higher score>",
+  "evidence_snippets": ["<short quote-like snippet from candidate answer>", "<second snippet>", "<third snippet>"],
   "followup": <true if a clarifying question would add meaningful signal>,
   "followup_question": "<specific behavioral follow-up, or empty string>"
 }}"""
@@ -1171,6 +1323,7 @@ General rules:
 - incorrect_points must name specific factual errors or misconceptions.
 - A score of 7+ requires that the majority of key concepts are correctly addressed.
 - Do not reward confidence without correctness.
+- Evidence anchoring is mandatory: include direct quote-like snippets from the transcript answer.
 
 Dimensions for technical evaluation:
 - correctness (0-10): Are the technical facts accurate?
@@ -1193,6 +1346,8 @@ Return ONLY valid JSON — no markdown, no extra keys:
   "strengths": ["<specific correct thing — under 15 words>", ...],
   "weaknesses": ["<specific gap or error — name the concept — under 15 words>", ...],
   "verdict": "<1 sentence brutally honest summary>",
+  "why_score_not_higher": "<1-2 sentences naming exact missing pieces that prevented a higher score>",
+  "evidence_snippets": ["<short quote-like snippet from candidate answer>", "<second snippet>", "<third snippet>"],
   "followup": <true if a probing technical follow-up would add signal>,
   "followup_question": "<specific follow-up, or empty string>"
 }}"""
@@ -1221,6 +1376,21 @@ Return ONLY valid JSON — no markdown, no extra keys:
         }
 
         verdict = str(parsed.get("verdict", "")).strip()
+        why_score_not_higher = str(parsed.get("why_score_not_higher", "")).strip()
+        raw_evidence = parsed.get("evidence_snippets", [])
+        evidence_snippets = (
+            [str(s).strip() for s in raw_evidence if str(s).strip()]
+            if isinstance(raw_evidence, list)
+            else []
+        )[:3]
+        analytics_bundle = compute_answer_analytics(
+            answer_text=answer,
+            response_analytics=response_analytics,
+            dimensions=dimensions,
+            base_score=final_score,
+            missing_concepts=missing_concepts,
+            interview_type=interview_type,
+        )
 
         result = {
             "score": final_score,
@@ -1233,9 +1403,17 @@ Return ONLY valid JSON — no markdown, no extra keys:
             "strengths": [str(s) for s in parsed.get("strengths", []) if s],
             "weaknesses": [str(w) for w in parsed.get("weaknesses", []) if w],
             "verdict": verdict,
+            "why_score_not_higher": (
+                why_score_not_higher
+                or "Key expected concepts were missing or insufficiently supported."
+            ),
+            "evidence_snippets": evidence_snippets,
             "feedback": verdict,  # backward-compat alias
             "followup": bool(parsed.get("followup", False)),
             "followup_question": str(parsed.get("followup_question", "")),
+            "response_analytics": response_analytics,
+            "response_analytics_metrics": analytics_bundle.get("metrics", {}),
+            "score_pillars": analytics_bundle.get("score_pillars", {}),
         }
 
     except Exception as e:
@@ -1249,9 +1427,19 @@ Return ONLY valid JSON — no markdown, no extra keys:
             "strengths": [],
             "weaknesses": ["Evaluation failed — answer could not be processed."],
             "verdict": "Evaluation error.",
+            "why_score_not_higher": "Evaluation failed, so higher score could not be justified.",
+            "evidence_snippets": [],
             "feedback": "Evaluation error.",
             "followup": False,
             "followup_question": "",
+            "response_analytics": response_analytics,
+            "response_analytics_metrics": {},
+            "score_pillars": {
+                "content_score": 0,
+                "delivery_score": 0,
+                "confidence_score": 0,
+                "communication_flow_score": 0,
+            },
         }
 
     print(
@@ -1307,6 +1495,10 @@ def store_step(state: InterviewState) -> dict:
         "index": history_index,
         "question": state.get("current_question", ""),
         "expected_answer": state.get("expected_answer", {}),
+        "target_competency": state.get("target_competency", ""),
+        "difficulty_rationale": state.get("difficulty_rationale", ""),
+        "anti_repetition_key": state.get("anti_repetition_key", ""),
+        "evidence_anchor": state.get("question_evidence_anchor", ""),
         "user_answer": state.get("user_answer", ""),
         "score": state.get("score", 0),
         "confidence": state.get("confidence", 0.0),
@@ -1316,6 +1508,11 @@ def store_step(state: InterviewState) -> dict:
         "strengths": state.get("strengths", []),
         "weaknesses": state.get("weaknesses", []),
         "verdict": state.get("verdict", ""),
+        "why_score_not_higher": state.get("why_score_not_higher", ""),
+        "evidence_snippets": state.get("evidence_snippets", []),
+        "response_analytics": state.get("response_analytics", {}),
+        "response_analytics_metrics": state.get("response_analytics_metrics", {}),
+        "score_pillars": state.get("score_pillars", {}),
         "difficulty": state.get("difficulty", "unknown"),
         "followup": state.get("followup", False),
         "followup_question": state.get("followup_question", ""),
@@ -1336,6 +1533,10 @@ def store_step(state: InterviewState) -> dict:
                 "strengths": entry["strengths"],
                 "weaknesses": entry["weaknesses"],
                 "verdict": entry["verdict"],
+                "why_score_not_higher": entry["why_score_not_higher"],
+                "evidence_snippets": entry["evidence_snippets"],
+                "response_analytics_metrics": entry["response_analytics_metrics"],
+                "score_pillars": entry["score_pillars"],
             }
         )
 
@@ -1508,7 +1709,15 @@ def _compute_deterministic_summary(
             "score": round(float(h.get("score", 0)) * 10),  # 0–100
             "difficulty": h.get("difficulty", "unknown"),
             "question": h.get("question", ""),
+            "target_competency": h.get("target_competency", ""),
+            "difficulty_rationale": h.get("difficulty_rationale", ""),
+            "anti_repetition_key": h.get("anti_repetition_key", ""),
+            "evidence_anchor": h.get("evidence_anchor", ""),
             "verdict": h.get("verdict", ""),
+            "why_score_not_higher": h.get("why_score_not_higher", ""),
+            "evidence_snippets": h.get("evidence_snippets", []),
+            "response_analytics_metrics": h.get("response_analytics_metrics", {}),
+            "score_pillars": h.get("score_pillars", {}),
             "missing_concepts": h.get("missing_concepts", []),
             "strengths": h.get("strengths", []),
             "weaknesses": h.get("weaknesses", []),
@@ -1541,6 +1750,11 @@ def _compute_deterministic_summary(
         if dim not in skill_scores:
             skill_scores[dim] = overall_100
 
+    interview_analytics = aggregate_interview_analytics(
+        history=history,
+        interruption_count=interruption_count,
+    )
+
     return {
         "plain_avg": plain_avg,
         "weighted_avg": weighted_avg,
@@ -1555,6 +1769,7 @@ def _compute_deterministic_summary(
         "dim_averages": dim_averages,
         "skill_scores": skill_scores,
         "question_scores": question_scores,
+        "interview_analytics": interview_analytics,
     }
 
 
@@ -1631,6 +1846,9 @@ def finalize(state: InterviewState) -> dict:
             "overall_score": 0,
             "recommendation": "Insufficient data",
             "summary": "No questions were answered.",
+            "content_quality": "No answer content was available to evaluate.",
+            "delivery_quality": "Delivery quality could not be evaluated without spoken answers.",
+            "interview_integrity": "Interview ended before evaluable answers were captured.",
             "what_went_right": [],
             "what_went_wrong": [],
             "strengths": [],
@@ -1638,11 +1856,31 @@ def finalize(state: InterviewState) -> dict:
             "tips": [],
             "skill_scores": {},
             "question_scores": [],
+            "score_pillars": {
+                "content_score": 0,
+                "delivery_score": 0,
+                "confidence_score": 0,
+                "communication_flow_score": 0,
+            },
+            "analytics": {
+                "filler_summary": {},
+                "flow_summary": {},
+                "confidence_summary": {},
+            },
+            "insights": {
+                "star_completeness": [],
+                "concept_coverage_trend": [],
+                "recovery_score": 0,
+                "pressure_handling_score": 0,
+                "conciseness_score": 0,
+                "coaching_priorities": [],
+            },
             # ── PATCH 5: Add integrity fields to empty-history branch ──────
             "end_reason": end_reason if "end_reason" in dir() else "user_ended",
             "is_early_exit": True,
             "interruption_count": 0,
         }
+        recommendation = summary_payload["recommendation"]
     else:
         # ──────────────────────────────────────────────────────────────────
         # STEP 1 — DETERMINISTIC COMPUTATION
@@ -1656,6 +1894,7 @@ def finalize(state: InterviewState) -> dict:
         recommendation = facts["recommendation"]
         skill_scores = facts["skill_scores"]
         question_scores = facts["question_scores"]
+        analytics_facts = facts.get("interview_analytics", {})
 
         extra_context = ""
         if custom_topics and not human_round:
@@ -1696,6 +1935,11 @@ COMPUTED FACTS (authoritative — do not contradict):
 - Repeated gaps (missed in 2+ questions): {json.dumps(facts['repeated_gaps'])}
 - Weak dimensions (avg < 5): {json.dumps(facts['weak_dimensions'])}
 - Dimension averages: {json.dumps(facts['dim_averages'])}
+- Score pillars: {json.dumps(analytics_facts.get('score_pillars', {}))}
+- Recovery score: {analytics_facts.get('recovery_score', 0)}/100
+- Pressure handling score: {analytics_facts.get('pressure_handling_score', 0)}/100
+- Conciseness score: {analytics_facts.get('conciseness_score', 0)}/100
+- Coaching priorities: {json.dumps(analytics_facts.get('coaching_priorities', []))}
 - End reason: {end_reason}{"  ⚠️  EARLY EXIT — candidate left before completing all questions." if is_early_exit else ""}
 - AI interruptions: {interruption_count} times the candidate spoke over the AI mid-answer
 {extra_context}
@@ -1705,7 +1949,11 @@ Full Q&A with verdicts:
 
 Return ONLY valid JSON — no markdown, no extra keys:
 {{
-  "summary": "<2 sentences. First: what you demonstrated overall (reference actual answers). Second: your single biggest gap (name the concept).>",
+  "summary": {{
+    "content_quality": "<2 sentences on technical/behavioral content quality, anchored in actual answers.>",
+    "delivery_quality": "<1-2 sentences on clarity/structure/communication quality, anchored in transcript behavior.>",
+    "interview_integrity": "<1 sentence on end_reason/interruptions/proctoring signals and impact.>"
+  }},
   "what_went_right": [
     {{"point": "<specific thing from the actual answers — under 20 words>", "tag": "<Core|Clarity|Structure|STAR|Design>"}},
     {{"point": "<specific thing>", "tag": "<tag>"}},
@@ -1727,7 +1975,7 @@ Rules:
 - Every point in what_went_right/wrong MUST reference something from the actual Q&A.
 - Tips must start with a verb (Always..., Lead with..., Practice..., Study...).
 - No bullet characters inside strings. No markdown.
-- If end_reason is NOT 'completed', the first sentence of "summary" MUST note that the session ended early.
+- If end_reason is NOT 'completed', "summary.interview_integrity" MUST explicitly note early termination.
 - If interruption_count > 2, include it as a weakness point in what_went_wrong.
 - Do not use "good job", "great answer", "nice work", "the candidate".
 """
@@ -1752,6 +2000,37 @@ Rules:
 
             what_went_right = clean_points(narrated.get("what_went_right", []))
             what_went_wrong = clean_points(narrated.get("what_went_wrong", []))
+            raw_summary = narrated.get("summary", {})
+            if isinstance(raw_summary, dict):
+                content_quality = str(raw_summary.get("content_quality", "")).strip()
+                delivery_quality = str(raw_summary.get("delivery_quality", "")).strip()
+                interview_integrity = str(
+                    raw_summary.get("interview_integrity", "")
+                ).strip()
+            else:
+                content_quality = str(raw_summary).strip()
+                delivery_quality = ""
+                interview_integrity = ""
+
+            if not content_quality:
+                content_quality = (
+                    f"You finished with {overall_100}/100 and showed mixed depth across tested competencies."
+                )
+            if not delivery_quality:
+                delivery_quality = (
+                    "Your delivery quality reflects clarity and structure signals observed in your responses."
+                )
+            if not interview_integrity:
+                interview_integrity = (
+                    "Integrity signals were stable throughout this session."
+                    if not is_early_exit and interruption_count <= 1
+                    else f"Integrity impact noted: end_reason={end_reason}, interruptions={interruption_count}."
+                )
+            summary_text = " ".join(
+                s
+                for s in [content_quality, delivery_quality, interview_integrity]
+                if s
+            ).strip()
 
             summary_payload = {
                 "role": role,
@@ -1764,8 +2043,25 @@ Rules:
                 "recommendation": recommendation,
                 "skill_scores": skill_scores,
                 "question_scores": question_scores,
+                "score_pillars": analytics_facts.get("score_pillars", {}),
+                "analytics": {
+                    "filler_summary": analytics_facts.get("filler_summary", {}),
+                    "flow_summary": analytics_facts.get("flow_summary", {}),
+                    "confidence_summary": analytics_facts.get("confidence_summary", {}),
+                },
+                "insights": {
+                    "star_completeness": analytics_facts.get("star_completeness", []),
+                    "concept_coverage_trend": analytics_facts.get("concept_coverage_trend", []),
+                    "recovery_score": analytics_facts.get("recovery_score", 0),
+                    "pressure_handling_score": analytics_facts.get("pressure_handling_score", 0),
+                    "conciseness_score": analytics_facts.get("conciseness_score", 0),
+                    "coaching_priorities": analytics_facts.get("coaching_priorities", []),
+                },
                 # ── Narrated content from LLM step ───────────────────────────
-                "summary": str(narrated.get("summary", "")),
+                "summary": summary_text,
+                "content_quality": content_quality,
+                "delivery_quality": delivery_quality,
+                "interview_integrity": interview_integrity,
                 "what_went_right": what_went_right,
                 "what_went_wrong": what_went_wrong,
                 "tips": [str(t) for t in narrated.get("tips", []) if t],
@@ -1799,9 +2095,34 @@ Rules:
                 "recommendation": recommendation,
                 "skill_scores": skill_scores,
                 "question_scores": question_scores,
+                "score_pillars": analytics_facts.get("score_pillars", {}),
+                "analytics": {
+                    "filler_summary": analytics_facts.get("filler_summary", {}),
+                    "flow_summary": analytics_facts.get("flow_summary", {}),
+                    "confidence_summary": analytics_facts.get("confidence_summary", {}),
+                },
+                "insights": {
+                    "star_completeness": analytics_facts.get("star_completeness", []),
+                    "concept_coverage_trend": analytics_facts.get("concept_coverage_trend", []),
+                    "recovery_score": analytics_facts.get("recovery_score", 0),
+                    "pressure_handling_score": analytics_facts.get("pressure_handling_score", 0),
+                    "conciseness_score": analytics_facts.get("conciseness_score", 0),
+                    "coaching_priorities": analytics_facts.get("coaching_priorities", []),
+                },
                 "summary": (
                     f"Interview completed with a weighted score of {facts['weighted_avg']}/10. "
                     f"Repeated gaps: {', '.join(facts['repeated_gaps']) or 'none identified'}."
+                ),
+                "content_quality": (
+                    f"Your content quality landed at {overall_100}/100 based on weighted question performance."
+                ),
+                "delivery_quality": (
+                    "Delivery quality was inferred from clarity and communication dimension averages."
+                ),
+                "interview_integrity": (
+                    "No major integrity concerns detected."
+                    if not is_early_exit and interruption_count <= 1
+                    else f"Integrity concern: end_reason={end_reason}, interruptions={interruption_count}."
                 ),
                 "what_went_right": [
                     {"point": s, "tag": "Core"} for s in facts["top_strengths"][:3]

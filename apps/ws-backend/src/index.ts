@@ -17,6 +17,21 @@ import "./workers/interviewCreation.workers.js";
 
 import { redisClient } from "./config/redis.config.js";
 
+type StructuredAnswerPayload = {
+  text: string;
+  analytics?: Record<string, unknown>;
+};
+
+const isStructuredAnswerPayload = (
+  value: unknown
+): value is StructuredAnswerPayload => {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as StructuredAnswerPayload).text === "string"
+  );
+};
+
 const app: express.Application = express();
 const server = http.createServer(app);
 
@@ -92,18 +107,54 @@ io.on("connection", (socket) => {
   });
 
   socket.on("submit_answer", async ({ interviewId, answer }) => {
-    await redisClient.set(`interview:${interviewId}:latest_answer`, answer, "EX", 300);
+    const answerPayload = isStructuredAnswerPayload(answer)
+      ? JSON.stringify({
+          text: answer.text.trim(),
+          analytics:
+            answer.analytics && typeof answer.analytics === "object"
+              ? answer.analytics
+              : {},
+        })
+      : String(answer ?? "");
+
+    await redisClient.set(
+      `interview:${interviewId}:latest_answer`,
+      answerPayload,
+      "EX",
+      300
+    );
 
     // Signal the Python node that an answer is ready
     await redisClient.publish(`interview:${interviewId}:answer_ready`, "1");
   });
 
-  socket.on("interview:end", async ({ interviewId }) => {
+  socket.on("interview:interruption", async ({ interviewId, count }) => {
+    await redisClient.set(
+      `interview:${interviewId}:interruptions`,
+      String(Math.max(0, Number(count) || 0)),
+      "EX",
+      60 * 60 * 24
+    );
+  });
+
+  socket.on("interview:end", async ({ interviewId, reason, durationSec }) => {
     await redisClient.set(
       `interview:${interviewId}:ended`,
       "1",
       "EX",
       3600
+    );
+    await redisClient.set(
+      `interview:${interviewId}:end_reason`,
+      String(reason || "user_ended"),
+      "EX",
+      60 * 60 * 24
+    );
+    await redisClient.set(
+      `interview:${interviewId}:duration_sec`,
+      String(Math.max(0, Number(durationSec) || 0)),
+      "EX",
+      60 * 60 * 24
     );
     await redisClient.set(
       `interview:${interviewId}:latest_answer`,

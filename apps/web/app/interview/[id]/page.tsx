@@ -23,6 +23,32 @@ type EndReason =
   | "tab_switch"      // switched tabs twice
   | "face_violation"; // face not detected / multiple faces within countdown
 
+type MicSample = { t: number; rms: number; zcr: number };
+
+type AnswerAnalyticsEnvelope = {
+  question_received_at_ms: number;
+  first_speech_at_ms: number | null;
+  submitted_at_ms: number;
+  audio: {
+    samples: number;
+    active_samples: number;
+    speaking_ms: number;
+    silence_ms: number;
+    pause_ratio: number;
+    long_pause_count: number;
+    rms_mean: number;
+    rms_std: number;
+    zcr_mean: number;
+    zcr_std: number;
+  };
+  speech: {
+    word_count: number;
+    response_latency_ms: number;
+    words_per_minute: number;
+    interrupted_ai: boolean;
+  };
+};
+
 /* ─────────────────────────────────────────────
    TIMER
 ───────────────────────────────────────────── */
@@ -276,13 +302,13 @@ function useFaceDetection(
     detectForVideo: (video: HTMLVideoElement, timestamp: number) => { detections: unknown[] };
     close: () => void;
   } | null>(null);
-  const statusRef     = useRef<FaceStatus>("ok");
-  const badFrames     = useRef(0);
-  const animFrameRef  = useRef<number | null>(null);
+  const statusRef = useRef<FaceStatus>("ok");
+  const badFrames = useRef(0);
+  const animFrameRef = useRef<number | null>(null);
   const lastVideoTime = useRef(-1);
-  const lastPollTime  = useRef(0);
+  const lastPollTime = useRef(0);
 
-  const GRACE_FRAMES    = 3;
+  const GRACE_FRAMES = 3;
   const POLL_INTERVAL_MS = 600;
 
   useEffect(() => {
@@ -333,7 +359,7 @@ function useFaceDetection(
 
       if (now - lastPollTime.current >= POLL_INTERVAL_MS) {
         lastPollTime.current = now;
-        const video    = videoRef.current;
+        const video = videoRef.current;
         const detector = detectorRef.current;
 
         if (
@@ -345,7 +371,7 @@ function useFaceDetection(
           lastVideoTime.current = video.currentTime;
           try {
             const result = detector.detectForVideo(video, performance.now());
-            const n      = result.detections.length;
+            const n = result.detections.length;
             setCount(n);
 
             const raw: FaceStatus = n === 0 ? "no-face" : n > 1 ? "multiple" : "ok";
@@ -391,27 +417,27 @@ function useFaceDetection(
 ───────────────────────────────────────────── */
 
 export default function InterviewPage() {
-  const router      = useRouter();
-  const params      = useParams();
+  const router = useRouter();
+  const params = useParams();
   const interviewId = params.id as string;
 
-  const [input, setInput]               = useState("");
-  const [micOn, setMicOn]               = useState(true);
-  const [camOn, setCamOn]               = useState(true);
-  const [aiSpeaking, setAiSpeaking]     = useState(false);
+  const [input, setInput] = useState("");
+  const [micOn, setMicOn] = useState(true);
+  const [camOn, setCamOn] = useState(true);
+  const [aiSpeaking, setAiSpeaking] = useState(false);
   const [sessionRunning, setSessionRunning] = useState(true);
-  const [isEnding, setIsEnding]         = useState(false);
+  const [isEnding, setIsEnding] = useState(false);
 
   const endLockRef = useRef(false);
 
   /* ── Fullscreen ───────────────────────────────────────────────────────── */
-  const [showGate, setShowGate]             = useState(true);
-  const [isFullscreen, setIsFullscreen]     = useState(false);
+  const [showGate, setShowGate] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [fsWarningCount, setFsWarningCount] = useState(0);
-  const [showFsWarning, setShowFsWarning]   = useState(false);
-  const fsWarningCountRef      = useRef(0);
-  const hasEnteredFsOnce       = useRef(false);
-  const suppressFsExitRef      = useRef(false);
+  const [showFsWarning, setShowFsWarning] = useState(false);
+  const fsWarningCountRef = useRef(0);
+  const hasEnteredFsOnce = useRef(false);
+  const suppressFsExitRef = useRef(false);
 
   /* ── Tab switch ───────────────────────────────────────────────────────── */
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
@@ -419,8 +445,8 @@ export default function InterviewPage() {
   const tabSwitchCountRef = useRef(0);
 
   /* ── Face modal ───────────────────────────────────────────────────────── */
-  const [showFaceModal, setShowFaceModal]   = useState(false);
-  const [faceCountdown, setFaceCountdown]   = useState(15);
+  const [showFaceModal, setShowFaceModal] = useState(false);
+  const [faceCountdown, setFaceCountdown] = useState(15);
   const faceCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /* ─────────────────────────────────────────────
@@ -440,19 +466,26 @@ export default function InterviewPage() {
   const endReasonRef = useRef<EndReason>("user_ended");
 
   /* ── Media refs ───────────────────────────────────────────────────────── */
-  const chatEndRef       = useRef<HTMLDivElement>(null);
-  const userVideoRef     = useRef<HTMLVideoElement>(null);
-  const aiAudioRef       = useRef<HTMLAudioElement>(null);
-  const userStreamRef    = useRef<MediaStream | null>(null);
-  const recorderRef      = useRef<MediaRecorder | null>(null);
-  const chunksRef        = useRef<BlobPart[]>([]);
-  const audioContextRef  = useRef<AudioContext | null>(null);
-  const isRecordingRef   = useRef(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const userVideoRef = useRef<HTMLVideoElement>(null);
+  const aiAudioRef = useRef<HTMLAudioElement>(null);
+  const userStreamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const isRecordingRef = useRef(false);
   const aiSourceCreatedRef = useRef(false);
 
-  const lastQuestionKeyRef  = useRef("");
-  const lastAnswerRef       = useRef("");
-  const answerThrottleRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastQuestionKeyRef = useRef("");
+  const lastAnswerRef = useRef("");
+  const answerThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const questionReceivedAtRef = useRef<number>(Date.now());
+  const firstSpeechAtRef = useRef<number | null>(null);
+  const interruptedThisAnswerRef = useRef(false);
+  const micMeterCtxRef = useRef<AudioContext | null>(null);
+  const micAnalyserRef = useRef<AnalyserNode | null>(null);
+  const micMeterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const micSampleBufferRef = useRef<MicSample[]>([]);
 
   const [micPermission, setMicPermission] = useState(false);
   const [camPermission, setCamPermission] = useState(false);
@@ -467,8 +500,139 @@ export default function InterviewPage() {
 
   const { addMessage, messages, reset } = useInterviewStore();
 
-  const endSessionRef    = useRef<(fromBackend?: boolean, reason?: EndReason) => void>(() => { });
+  const endSessionRef = useRef<(fromBackend?: boolean, reason?: EndReason) => void>(() => { });
   const abortListeningRef = useRef<() => void>(() => { });
+
+  const startMicMeter = useCallback((stream: MediaStream) => {
+    if (micMeterTimerRef.current) return;
+
+    if (!micMeterCtxRef.current) {
+      micMeterCtxRef.current = new AudioContext();
+    }
+
+    const ctx = micMeterCtxRef.current;
+    if (!ctx || micAnalyserRef.current) return;
+
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+
+    source.connect(analyser);
+    micAnalyserRef.current = analyser;
+
+    const fftSize = analyser.fftSize;
+    if (!fftSize) return;
+    const frame = new Float32Array(fftSize);
+    if (!frame) return; 
+    console.log("Frame is ",frame)
+    micMeterTimerRef.current = setInterval(() => {
+      const now = Date.now();
+      
+      analyser.getFloatTimeDomainData(frame);
+
+      let sq = 0;
+      let crossings = 0;
+        for (let i = 0; i < frame?.length; i++) {
+          sq += frame[i]! * frame[i]!;
+          if (i > 0 && frame[i - 1]! <= 0 && frame[i]! > 0) crossings += 1;
+        }
+
+      const rms = Math.sqrt(sq / frame.length);
+      const zcr = crossings / frame.length;
+
+      micSampleBufferRef.current.push({ t: now, rms, zcr });
+
+      if (micSampleBufferRef.current.length > 3000) {
+        micSampleBufferRef.current.splice(
+          0,
+          micSampleBufferRef.current.length - 3000
+        );
+      }
+    }, 120);
+  }, []);
+
+  const stopMicMeter = useCallback(() => {
+    if (micMeterTimerRef.current) {
+      clearInterval(micMeterTimerRef.current);
+      micMeterTimerRef.current = null;
+    }
+    micAnalyserRef.current = null;
+    if (micMeterCtxRef.current) {
+      micMeterCtxRef.current.close().catch(() => { });
+      micMeterCtxRef.current = null;
+    }
+  }, []);
+
+  const buildAnswerAnalytics = useCallback(
+    (text: string): AnswerAnalyticsEnvelope => {
+      const submittedAt = Date.now();
+      const questionAt = questionReceivedAtRef.current || submittedAt;
+      const firstSpeechAt = firstSpeechAtRef.current;
+      const startAt = firstSpeechAt ?? questionAt;
+      const sampleWindow = micSampleBufferRef.current.filter(
+        (s) => s.t >= startAt && s.t <= submittedAt
+      );
+      const wordCount = text.split(/\s+/).filter(Boolean).length;
+
+      const activeThreshold = 0.014;
+      let active = 0;
+      let longPauseCount = 0;
+      let currentPauseMs = 0;
+      for (const sample of sampleWindow) {
+        const speaking = sample.rms > activeThreshold;
+        if (speaking) {
+          if (currentPauseMs >= 1500) longPauseCount += 1;
+          currentPauseMs = 0;
+          active += 1;
+        } else {
+          currentPauseMs += 120;
+        }
+      }
+
+      const samples = sampleWindow.length;
+      const speakingMs = active * 120;
+      const silenceMs = Math.max(0, samples * 120 - speakingMs);
+      const pauseRatio = samples > 0 ? silenceMs / (samples * 120) : 0;
+      const latency = Math.max(0, (firstSpeechAt ?? submittedAt) - questionAt);
+      const mins = Math.max(0.25, speakingMs / 60000 || (submittedAt - questionAt) / 60000);
+      const wpm = wordCount / mins;
+
+      const mean = (arr: number[]) =>
+        arr.length ? arr.reduce((acc, x) => acc + x, 0) / arr.length : 0;
+      const std = (arr: number[]) => {
+        if (!arr.length) return 0;
+        const m = mean(arr);
+        return Math.sqrt(arr.reduce((acc, x) => acc + (x - m) ** 2, 0) / arr.length);
+      };
+      const rmsValues = sampleWindow.map((s) => s.rms);
+      const zcrValues = sampleWindow.map((s) => s.zcr);
+
+      return {
+        question_received_at_ms: questionAt,
+        first_speech_at_ms: firstSpeechAt,
+        submitted_at_ms: submittedAt,
+        audio: {
+          samples,
+          active_samples: active,
+          speaking_ms: speakingMs,
+          silence_ms: silenceMs,
+          pause_ratio: Number(pauseRatio.toFixed(3)),
+          long_pause_count: longPauseCount,
+          rms_mean: Number(mean(rmsValues).toFixed(6)),
+          rms_std: Number(std(rmsValues).toFixed(6)),
+          zcr_mean: Number(mean(zcrValues).toFixed(6)),
+          zcr_std: Number(std(zcrValues).toFixed(6)),
+        },
+        speech: {
+          word_count: wordCount,
+          response_latency_ms: latency,
+          words_per_minute: Number(wpm.toFixed(2)),
+          interrupted_ai: interruptedThisAnswerRef.current,
+        },
+      };
+    },
+    [],
+  );
 
   /* ─────────────────────────────────────────────
      END SESSION
@@ -518,6 +682,7 @@ export default function InterviewPage() {
       }
 
       try { userStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      stopMicMeter();
 
       if (document.fullscreenElement) {
         suppressFsExitRef.current = true;
@@ -526,7 +691,11 @@ export default function InterviewPage() {
 
       if (!fromBackend) {
         try {
-          getSocket().emit("interview:end", { interviewId });
+          getSocket().emit("interview:end", {
+            interviewId,
+            reason: endReasonRef.current,
+            durationSec: timerSeconds.current,
+          });
         } catch (e) {
           console.error("[socket end]", e);
         }
@@ -544,10 +713,10 @@ export default function InterviewPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             interviewId,
-            endReason:          endReasonRef.current,
-            interruptionCount:  interruptionCountRef.current,
-            tabSwitches:        tabSwitchCountRef.current,
-            fsExits:            fsWarningCountRef.current,
+            endReason: endReasonRef.current,
+            interruptionCount: interruptionCountRef.current,
+            tabSwitches: tabSwitchCountRef.current,
+            fsExits: fsWarningCountRef.current,
             sessionDurationSec: timerSeconds.current,
           }),
         });
@@ -562,7 +731,7 @@ export default function InterviewPage() {
         router.push(`/feedback/${interviewId}/?reason=${endReasonRef.current}`);
       }, 2000);
     },
-    [interviewId, router, reset, isEnding, timerSeconds],
+    [interviewId, router, reset, isEnding, timerSeconds, stopMicMeter],
   );
 
   useEffect(() => { endSessionRef.current = endSession; }, [endSession]);
@@ -686,14 +855,14 @@ export default function InterviewPage() {
     try {
       setAiSpeaking(true);
 
-      const res  = await fetch("/api/tts", {
-        method:  "POST",
+      const res = await fetch("/api/tts", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ text, voice: "alloy" }),
+        body: JSON.stringify({ text, voice: "alloy" }),
       });
 
       const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
 
       aiAudioRef.current.src = url;
       await aiAudioRef.current.play();
@@ -724,6 +893,10 @@ export default function InterviewPage() {
         ? new Date(data.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
         : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
+      questionReceivedAtRef.current = data.time ?? Date.now();
+      firstSpeechAtRef.current = null;
+      interruptedThisAnswerRef.current = false;
+
       addMessage({ id: Date.now(), role: "ai", text: data.question, time: now });
       playAIAudio(data.question);
     },
@@ -738,13 +911,13 @@ export default function InterviewPage() {
 
     const socket = getSocket();
 
-    const onQuestion  = (data: any) => handleQuestionRef.current(data);
-    const onComplete  = ()           => endSessionRef.current(true, "completed");
+    const onQuestion = (data: any) => handleQuestionRef.current(data);
+    const onComplete = () => endSessionRef.current(true, "completed");
 
     socket.off("interview:question", onQuestion);
-    socket.off("interview:complete",  onComplete);
-    socket.on("interview:question",   onQuestion);
-    socket.on("interview:complete",   onComplete);
+    socket.off("interview:complete", onComplete);
+    socket.on("interview:question", onQuestion);
+    socket.on("interview:complete", onComplete);
 
     if (socket.connected) socket.emit("join_interview", { interviewId });
 
@@ -752,9 +925,9 @@ export default function InterviewPage() {
     socket.on("connect", onReconnect);
 
     return () => {
-      socket.off("connect",            onReconnect);
+      socket.off("connect", onReconnect);
       socket.off("interview:question", onQuestion);
-      socket.off("interview:complete",  onComplete);
+      socket.off("interview:complete", onComplete);
     };
   }, [interviewId, showGate]);
 
@@ -769,13 +942,15 @@ export default function InterviewPage() {
         userStreamRef.current = stream;
         setMicPermission(true);
         setCamPermission(true);
+        startMicMeter(stream);
       })
       .catch((err) => console.error("[media]", err));
 
     return () => {
       try { userStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      stopMicMeter();
     };
-  }, []);
+  }, [startMicMeter, stopMicMeter]);
 
   useEffect(() => {
     if (userVideoRef.current && userStreamRef.current) {
@@ -804,12 +979,21 @@ export default function InterviewPage() {
       setInput("");
 
       if (!endLockRef.current) {
-        getSocket().emit("submit_answer", { interviewId, answer: trimmed });
+        const analytics = buildAnswerAnalytics(trimmed);
+        getSocket().emit("submit_answer", {
+          interviewId,
+          answer: {
+            text: trimmed,
+            analytics,
+          },
+        });
       }
 
+      firstSpeechAtRef.current = null;
+      interruptedThisAnswerRef.current = false;
       setAiSpeaking(true);
     },
-    [addMessage, interviewId],
+    [addMessage, interviewId, buildAnswerAnalytics],
   );
 
   /* ─────────────────────────────────────────────
@@ -833,8 +1017,13 @@ export default function InterviewPage() {
       silenceThresholdMs: 3000,
 
       onSpeechStart: useCallback(() => {
+        if (!firstSpeechAtRef.current) {
+          firstSpeechAtRef.current = Date.now();
+        }
+
         // Only count as interruption if AI was actually speaking
         if (!aiSpeakingRef.current) return;
+        interruptedThisAnswerRef.current = true;
 
         // 1. Stop AI audio immediately
         if (aiAudioRef.current) {
@@ -892,7 +1081,7 @@ export default function InterviewPage() {
     if (!userStreamRef.current || isRecordingRef.current) return;
     try {
       isRecordingRef.current = true;
-      const stream       = userStreamRef.current;
+      const stream = userStreamRef.current;
       const audioContext = new AudioContext();
       audioContextRef.current = audioContext;
       const mixedDest = audioContext.createMediaStreamDestination();
@@ -916,7 +1105,7 @@ export default function InterviewPage() {
 
       const recorder = new MediaRecorder(mixedStream, { mimeType });
       recorderRef.current = recorder;
-      chunksRef.current   = [];
+      chunksRef.current = [];
 
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
@@ -924,7 +1113,7 @@ export default function InterviewPage() {
 
       recorder.onstop = async () => {
         const blob = new Blob(chunksRef.current, { type: "video/webm" });
-        const fd   = new FormData();
+        const fd = new FormData();
         fd.append("file", blob, "recording.webm");
         fd.append("interviewId", interviewId);
         await fetch("/api/save-recording", { method: "POST", body: fd });
@@ -1014,9 +1203,9 @@ export default function InterviewPage() {
               onClick={() =>
                 isFullscreen
                   ? (() => {
-                      suppressFsExitRef.current = true;
-                      document.exitFullscreen().catch(() => { });
-                    })()
+                    suppressFsExitRef.current = true;
+                    document.exitFullscreen().catch(() => { });
+                  })()
                   : enterFullscreen()
               }
               title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
