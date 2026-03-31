@@ -28,9 +28,6 @@ export async function GET(req: NextRequest) {
       resumeUrl: file.url?.split("uploads/")[1] || null, 
       resumeFileName: file.OriginalFileName,
     });
-        
-
-
   } catch (error) {
     console.error("Error getting resume:", error);
     return NextResponse.json(

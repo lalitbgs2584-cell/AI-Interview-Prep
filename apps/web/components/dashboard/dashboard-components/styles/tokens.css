@@ -1,0 +1,112 @@
+/* ══════════════════════════════════════
+   tokens.css  —  Design Tokens & Reset
+══════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500&display=swap');
+
+/* ── Reset ── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── Token map (also exposes HSL channels for profile page) ── */
+:root {
+  /* Surfaces */
+  --bg:        #080b12;
+  --surface:   #0c1019;
+  --card:      #111620;
+  --card-2:    #161c28;
+
+  /* Borders */
+  --border:        rgba(255, 255, 255, 0.065);
+  --border-strong: rgba(255, 255, 255, 0.13);
+
+  /* Brand / accent */
+  --accent:     #ff5c35;
+  --accent-dim: rgba(255, 92, 53, 0.18);
+  --accent-low: rgba(255, 92, 53, 0.07);
+  --accent-2:   #ff8162;
+  --accent-3:   #ff3010;
+
+  /* Semantic colours */
+  --positive: #e2a84b;
+  --amber:    #f5a623;
+  --rose:     #ff4d6d;
+  --sky:      #38bdf8;
+  --violet:   #a78bfa;
+
+  /* Text */
+  --text:   #eef0f8;
+  --text-2: #b0b8cc;
+  --text-3: #6b7590;
+  --muted:  #6b7590;
+
+  /* HSL channels used by profile page components */
+  --foreground:          220 15% 95%;
+  --muted-foreground:    220 10% 55%;
+  --primary:             16 100% 57%;   /* #ff5c35 */
+  --primary-foreground:  0 0% 100%;
+  --accent-2-hsl:        16 100% 69%;
+  --accent-3-hsl:        10 100% 50%;
+
+  /* Typography */
+  --ff-display: 'Outfit', sans-serif;
+  --ff-body:    'Outfit', sans-serif;
+  --ff-mono:    'Geist Mono', monospace;
+
+  /* Radii */
+  --r-sm:   6px;
+  --r-md:   10px;
+  --r-lg:   16px;
+  --r-xl:   24px;
+  --r-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm:     0 1px 3px rgba(0,0,0,0.35);
+  --shadow-md:     0 4px 20px rgba(0,0,0,0.45);
+  --shadow-accent: 0 0 30px rgba(255,92,53,0.22);
+
+  /* Easing */
+  --ease-snap:   cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out:    cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Duration */
+  --dur-fast: 120ms;
+  --dur-base: 220ms;
+  --dur-slow: 400ms;
+
+  /* Layout */
+  --sidebar-w: 240px;
+}
+
+/* ── Base body ── */
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ff-body);
+  font-size: 15px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+  background-image:
+    radial-gradient(ellipse 80% 50% at 10%   0%, rgba(255,92,53,0.06)  0%, transparent 55%),
+    radial-gradient(ellipse 60% 50% at 90% 100%, rgba(167,139,250,0.05) 0%, transparent 55%),
+    radial-gradient(circle 1px at center, rgba(255,255,255,0.035) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 28px 28px;
+}
+
+/* ── Noise overlay ── */
+.noise {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  opacity: 0.42;
+  mix-blend-mode: overlay;
+}

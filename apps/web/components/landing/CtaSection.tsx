@@ -1,10 +1,18 @@
 "use client";
 
+import { useState } from "react";
 import { BtnPrimary } from "../BtnPrimary";
 import { useRouter } from "next/navigation";
 
 export function CtaSection() {
   const router = useRouter();
+  const [loading, setLoading] = useState(false);
+
+  const handleClick = async () => {
+    setLoading(true);
+    await new Promise((r) => setTimeout(r, 800));
+    router.push("/login");
+  };
 
   return (
     <section style={{ padding: "9rem 2rem", textAlign: "center", position: "relative", overflow: "hidden" }}>
@@ -16,7 +24,9 @@ export function CtaSection() {
         <p style={{ color: "var(--muted)", fontSize: "1.1rem", maxWidth: 460, margin: "0 auto 3rem", lineHeight: 1.7 }}>
           Join early access and get your first 3 AI interviews completely free. No credit card required.
         </p>
-        <BtnPrimary onClick={() => router.push("/login")} large>Get Started</BtnPrimary>
+        <BtnPrimary onClick={handleClick} large loading={loading}>
+          {loading ? "Getting Started" : "Get Started"}
+        </BtnPrimary>
       </div>
     </section>
   );

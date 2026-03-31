@@ -19,11 +19,18 @@ model User {
   accounts      Account[]
 
   // Resume
-  isResumeUploaded Boolean @default(false)
+  isResumeUploaded Boolean    @default(false)
   // Soft delete
-  isDeleted        Boolean @default(false)
-
-  role UserRole @default(USER)
+  isDeleted        Boolean    @default(false)
+  isBlocked        Boolean    @default(false)
+  isBlockedReason  String     @default("")
+  isBlockedAt      DateTime?
+  streak           Int        @default(0) // current login streak (days)
+  bestStreak       Int        @default(0) // all-time best streak
+  lastLoginAt      DateTime? // track for streak logic
+  activityMap      Json       @default("{}") // ISO-date → session count map
+  role             UserRole   @default(USER)
+  gapReport        GapReport?
 
   interviews Interview[]
   skills     UserSkill[]
@@ -119,11 +126,11 @@ enum Difficulty {
 // SKILLS
 
 model Skill {
-  id       String      @id @default(uuid())
-  name     String      @unique
+  id       String  @id @default(uuid())
+  name     String  @unique
   category String?
 
-  users    UserSkill[]
+  users UserSkill[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -144,24 +151,6 @@ model UserSkill {
   @@map("user_skill")
 }
 
-// QUESTION BANK
-
-model Question {
-  id         String         @id @default(uuid())
-  content    String
-  difficulty Difficulty?
-  type       InterviewType?
-
-  interviews InterviewQuestion[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([difficulty])
-  @@index([type])
-  @@map("question")
-}
-
 // INTERVIEWS
 
 model Interview {
@@ -172,81 +161,25 @@ model Interview {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  videoUrl String?
-  status InterviewStatus @default(CREATED)
-  type   InterviewType   @default(TECHNICAL)
+  videoUrl           String?
+  status             InterviewStatus @default(CREATED)
+  type               InterviewType   @default(TECHNICAL)
+  endReason          String?
+  interruptionCount  Int?
+  tabSwitches        Int             @default(0)
+  fsExits            Int             @default(0)
+  sessionDurationSec Int             @default(0)
 
   questions InterviewQuestion[]
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  summary     InterviewSummary?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
   completedAt DateTime?
 
   @@index([userId])
   @@index([status])
   @@map("interview")
-}
-
-model InterviewQuestion {
-  id String @id @default(uuid())
-
-  interviewId String
-  questionId  String
-
-  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
-  question  Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
-
-  response Response?
-
-  order Int?
-  score Int?
-
-  createdAt DateTime @default(now())
-
-  @@unique([interviewId, questionId])
-  @@index([interviewId])
-  @@index([questionId])
-  @@map("interview_question")
-}
-
-// RESPONSE & AI EVALUATION
-
-model Response {
-  id String @id @default(uuid())
-
-  interviewQuestionId String            @unique
-  interviewQuestion   InterviewQuestion @relation(fields: [interviewQuestionId], references: [id], onDelete: Cascade)
-  submittedAt     DateTime?
-
-  evaluation Evaluation?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([interviewQuestionId])
-  @@map("response")
-}
-
-model Evaluation {
-  id String @id @default(uuid())
-
-  responseId String   @unique
-  response   Response @relation(fields: [responseId], references: [id], onDelete: Cascade)
-
-  overallScore    Int?
-  clarity         Int?
-  technical       Int?
-  confidence      Int? // ← existing field
-  confidenceScore Float? // ← ADD THIS (0.0 – 1.0 or 0–100)
-
-  feedback     String?
-  strengths    String?
-  improvements String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@map("evaluation")
 }
 
 model File {
@@ -271,10 +204,10 @@ model File {
 
 model Resume {
   id             String   @id @default(uuid())
-  userId         String
+  userId         String   @unique
   fileId         String   @unique
   neo4jNodeId    String?
-  qdrantPointIds String[] @default([]) // postgres array
+  qdrantPointIds String[] @default([])
   storedInNeo4j  Boolean  @default(false)
   storedInQdrant Boolean  @default(false)
 
@@ -285,13 +218,26 @@ model Resume {
   education       Education[]
   projects        Project[]
   extracurricular Extracurricular[]
+  insights        Insights?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  
-@@unique([userId])
   @@index([userId])
   @@map("resume")
+}
+
+model Insights {
+  id              String   @id @default(uuid())
+  resumeId        String   @unique
+  resume          Resume   @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  experienceLevel Int      @default(0)
+  keySkills       String[]
+  ATSSCORE        Int      @default(0)
+  strongDomains   String[] @default([])
+  weakAreas       String[] @default([])
+
+  @@index([resumeId])
+  @@map("insights")
 }
 
 model Extracurricular {
@@ -355,4 +301,185 @@ model WorkExperience {
 
   @@index([resumeId])
   @@map("work_experience")
+}
+
+model GapReport {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // { concept: cumulativeCount } — merged from all interview gap_frequency maps
+  conceptFrequency Json @default("{}")
+
+  // concepts appearing as a gap in 2+ interviews
+  persistentGaps String[] @default([])
+
+  // dimension name → average score across all interviews (0–10)
+  dimensionAverages Json @default("{}")
+
+  // ISO date of most recent interview factored in
+  lastUpdatedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId])
+  @@index([userId])
+  @@map("gap_report")
+}
+
+model InterviewSummary {
+  id String @id @default(uuid())
+
+  interviewId String    @unique
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  // ── Deterministic scores ──────────────────────────────────────────────────
+  overallScore    Int    @default(0) // 0–100, difficulty-weighted
+  plainAvg        Float  @default(0) // simple 0–10 average
+  weightedAvg     Float  @default(0) // difficulty-weighted 0–10 average
+  recommendation  String @default("Needs More Evaluation")
+  durationSeconds Int    @default(0)
+
+  // ── LLM-narrated content ──────────────────────────────────────────────────
+  summary String?
+
+  // { point: string, tag: string }[]
+  whatWentRight Json @default("[]")
+  whatWentWrong Json @default("[]")
+
+  tips String[] @default([])
+
+  // ── Skill dimension scores ────────────────────────────────────────────────
+  // { "Technical Depth": 72, "Communication": 80, ... }
+  skillScores Json @default("{}")
+
+  // ── Per-question score snapshots ──────────────────────────────────────────
+  // [{ index, score(0-100), difficulty, question, verdict, missing_concepts[], ... }]
+  questionScores Json @default("[]")
+
+  // ── Gap analysis (fully deterministic) ────────────────────────────────────
+  // { repeated_gaps[], all_gaps[], gap_frequency{}, weak_dimensions[], dim_averages{} }
+  gapAnalysis Json @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([interviewId])
+  @@map("interview_summary")
+}
+
+model Question {
+  id         String         @id @default(uuid())
+  content    String
+  difficulty Difficulty?
+  type       InterviewType?
+
+  // NEW — expected answer metadata for comparative evaluation
+  expectedAnswer Json? // { key_concepts[], reasoning_steps[], ideal_structure, common_mistakes[] }
+
+  interviews InterviewQuestion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([difficulty])
+  @@index([type])
+  @@map("question")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. REPLACE the existing InterviewQuestion model
+//    Add: expectedAnswer Json? — per-interview snapshot of expected answer
+//         (decoupled from the Question bank to allow per-session customisation)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model InterviewQuestion {
+  id String @id @default(uuid())
+
+  interviewId String
+  questionId  String
+
+  interview Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  question  Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  response Response?
+
+  order Int?
+  score Int?
+
+  // NEW — snapshot of the expected answer used during this interview session
+  expectedAnswer Json? // { key_concepts[], reasoning_steps[], ideal_structure, common_mistakes[] }
+
+  createdAt DateTime @default(now())
+
+  @@unique([interviewId, questionId])
+  @@index([interviewId])
+  @@index([questionId])
+  @@map("interview_question")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. REPLACE the existing Response model
+//    Add: userAnswer String? — stores the raw text of the candidate's answer
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Response {
+  id String @id @default(uuid())
+
+  interviewQuestionId String            @unique
+  interviewQuestion   InterviewQuestion @relation(fields: [interviewQuestionId], references: [id], onDelete: Cascade)
+
+  // NEW — the candidate's actual answer text
+  userAnswer  String?
+  submittedAt DateTime?
+
+  evaluation Evaluation?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([interviewQuestionId])
+  @@map("response")
+}
+
+model Evaluation {
+  id String @id @default(uuid())
+
+  responseId String   @unique
+  response   Response @relation(fields: [responseId], references: [id], onDelete: Cascade)
+
+  // ── Scores ────────────────────────────────────────────────────────────────
+  overallScore    Int? // 0–10 (difficulty-capped)
+  overallScore100 Int? // 0–100 convenience field (overallScore * 10)
+  confidence      Float? // LLM confidence 0.0–1.0
+
+  // ── Dimensional breakdown (NEW) ───────────────────────────────────────────
+  // Technical:   { correctness, depth, clarity, communication }     all 0–10
+  // Behavioral:  { star_structure, self_awareness, clarity, communication } all 0–10
+  dimensions Json?
+
+  // ── Comparative analysis (NEW) ────────────────────────────────────────────
+  missingConcepts String[] @default([]) // key concepts absent from the answer
+  incorrectPoints String[] @default([]) // factual errors or misconceptions
+
+  // ── Per-answer verdict (strict, replaces vague "feedback") ────────────────
+  strengths  String[] @default([]) // specific things done well
+  weaknesses String[] @default([]) // specific gaps, named explicitly
+  verdict    String? // 1-line brutally honest summary
+
+  // ── Follow-up ─────────────────────────────────────────────────────────────
+  followup         Boolean @default(false)
+  followupQuestion String?
+
+  // ── Legacy fields kept for backward compatibility ─────────────────────────
+  clarity      Int?
+  technical    Int?
+  improvements String?
+  feedback     String? // mirrors verdict for backward compat
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("evaluation")
 }

@@ -7,23 +7,73 @@ import { useSpeechToText } from "@/hooks/useSpeechHook";
 import { getSocket } from "@/ws-client-config/socket";
 import { useInterviewStore } from "@/store/useInterviewStore";
 
-/* ---------------------- TIMER ---------------------- */
+/* ─────────────────────────────────────────────
+   TYPES
+───────────────────────────────────────────── */
+
+/**
+ * Why the session ended.
+ * Sent to the backend so feedback can flag early exits,
+ * violations, and compute an "integrity score".
+ */
+type EndReason =
+  | "completed"       // backend sent interview:complete — full session done
+  | "user_ended"      // candidate clicked "End Session"
+  | "fullscreen"      // exited fullscreen twice
+  | "tab_switch"      // switched tabs twice
+  | "face_violation"; // face not detected / multiple faces within countdown
+
+type MicSample = { t: number; rms: number; zcr: number };
+
+type AnswerAnalyticsEnvelope = {
+  question_received_at_ms: number;
+  first_speech_at_ms: number | null;
+  submitted_at_ms: number;
+  audio: {
+    samples: number;
+    active_samples: number;
+    speaking_ms: number;
+    silence_ms: number;
+    pause_ratio: number;
+    long_pause_count: number;
+    rms_mean: number;
+    rms_std: number;
+    zcr_mean: number;
+    zcr_std: number;
+  };
+  speech: {
+    word_count: number;
+    response_latency_ms: number;
+    words_per_minute: number;
+    interrupted_ai: boolean;
+  };
+};
+
+/* ─────────────────────────────────────────────
+   TIMER
+───────────────────────────────────────────── */
 
 function useTimer(running: boolean) {
   const [seconds, setSeconds] = useState(0);
+  const secondsRef = useRef(0);
 
   useEffect(() => {
     if (!running) return;
-    const id = setInterval(() => setSeconds((s) => s + 1), 1000);
+    const id = setInterval(() => {
+      secondsRef.current += 1;
+      setSeconds(secondsRef.current);
+    }, 1000);
     return () => clearInterval(id);
   }, [running]);
 
   const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
   const ss = String(seconds % 60).padStart(2, "0");
-  return `${mm}:${ss}`;
+  return { display: `${mm}:${ss}`, seconds: secondsRef };
 }
 
-/* ---------------------- WAVE BARS ---------------------- */
+/* ─────────────────────────────────────────────
+   WAVE BARS
+───────────────────────────────────────────── */
 
 function WaveBars({ active }: { active: boolean }) {
   return (
@@ -35,7 +85,9 @@ function WaveBars({ active }: { active: boolean }) {
   );
 }
 
-/* ---------------------- FULLSCREEN GATE ---------------------- */
+/* ─────────────────────────────────────────────
+   FULLSCREEN GATE
+───────────────────────────────────────────── */
 
 function FullscreenGate({ onEnter }: { onEnter: () => void }) {
   return (
@@ -77,7 +129,9 @@ function FullscreenGate({ onEnter }: { onEnter: () => void }) {
   );
 }
 
-/* ---------------------- FULLSCREEN WARNING MODAL ---------------------- */
+/* ─────────────────────────────────────────────
+   FULLSCREEN WARNING MODAL
+───────────────────────────────────────────── */
 
 function FullscreenWarningModal({ count, onReenter }: { count: number; onReenter: () => void }) {
   const isTerminal = count >= 2;
@@ -116,7 +170,9 @@ function FullscreenWarningModal({ count, onReenter }: { count: number; onReenter
   );
 }
 
-/* ---------------------- TAB SWITCH WARNING MODAL ---------------------- */
+/* ─────────────────────────────────────────────
+   TAB SWITCH WARNING MODAL
+───────────────────────────────────────────── */
 
 function TabSwitchWarningModal({ count, onDismiss }: { count: number; onDismiss: () => void }) {
   const isTerminal = count >= 2;
@@ -148,7 +204,9 @@ function TabSwitchWarningModal({ count, onDismiss }: { count: number; onDismiss:
   );
 }
 
-/* ---------------------- FACE VIOLATION MODAL ---------------------- */
+/* ─────────────────────────────────────────────
+   FACE VIOLATION MODAL
+───────────────────────────────────────────── */
 
 function FaceViolationModal({ status, countdown, onDismiss }: { status: "no-face" | "multiple"; countdown: number; onDismiss: () => void }) {
   const isMultiple = status === "multiple";
@@ -188,7 +246,9 @@ function FaceViolationModal({ status, countdown, onDismiss }: { status: "no-face
   );
 }
 
-/* ---------------------- FACE STATUS BANNER ---------------------- */
+/* ─────────────────────────────────────────────
+   FACE STATUS BANNER
+───────────────────────────────────────────── */
 
 function FaceStatusBanner({ status }: { status: "no-face" | "multiple" }) {
   const isMultiple = status === "multiple";
@@ -202,68 +262,159 @@ function FaceStatusBanner({ status }: { status: "no-face" | "multiple" }) {
   );
 }
 
-/* ---------------------- FACE DETECTION HOOK ---------------------- */
+/* ─────────────────────────────────────────────
+   INTERRUPTION BADGE  (new)
+   Shows live how many times user interrupted AI.
+───────────────────────────────────────────── */
+
+function InterruptionBadge({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: "6px",
+      padding: "4px 10px", borderRadius: "99px",
+      background: "rgba(251,146,60,0.1)", border: "1px solid rgba(251,146,60,0.3)",
+      fontSize: "12px", color: "#fb923c", fontWeight: 600,
+    }}>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+        <path d="M9 18V5l12-2v13M9 18a3 3 0 01-3 3 3 3 0 01-3-3 3 3 0 013-3 3 3 0 013 3zM21 16a3 3 0 01-3 3 3 3 0 01-3-3 3 3 0 013-3 3 3 0 013 3z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      Interruptions: {count}
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────
+   FACE DETECTION HOOK (MediaPipe)
+───────────────────────────────────────────── */
 
 type FaceStatus = "ok" | "no-face" | "multiple";
 
-function useFaceDetection(videoRef: React.RefObject<HTMLVideoElement | null>, enabled: boolean) {
+function useFaceDetection(
+  videoRef: React.RefObject<HTMLVideoElement | null>,
+  enabled: boolean,
+) {
   const [status, setStatus] = useState<FaceStatus>("ok");
   const [count, setCount] = useState(1);
   const [modelsReady, setModelsReady] = useState(false);
-  const badFrames = useRef(0);
+
+  const detectorRef = useRef<{
+    detectForVideo: (video: HTMLVideoElement, timestamp: number) => { detections: unknown[] };
+    close: () => void;
+  } | null>(null);
   const statusRef = useRef<FaceStatus>("ok");
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const POLL_MS = 600;
+  const badFrames = useRef(0);
+  const animFrameRef = useRef<number | null>(null);
+  const lastVideoTime = useRef(-1);
+  const lastPollTime = useRef(0);
+
   const GRACE_FRAMES = 3;
+  const POLL_INTERVAL_MS = 600;
 
   useEffect(() => {
-    import("face-api.js").then((faceapi) => {
-      faceapi.nets.tinyFaceDetector.loadFromUri("/models")
-        .then(() => setModelsReady(true))
-        .catch((err) => console.warn("[face-api] Load failed:", err));
-    });
+    let cancelled = false;
+
+    async function loadModel() {
+      try {
+        const { FaceDetector, FilesetResolver } = await import("@mediapipe/tasks-vision");
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm",
+        );
+        const detector = await FaceDetector.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+            delegate: "GPU",
+          },
+          runningMode: "VIDEO",
+          minDetectionConfidence: 0.45,
+          minSuppressionThreshold: 0.3,
+        });
+        if (!cancelled) { detectorRef.current = detector; setModelsReady(true); }
+      } catch (err) {
+        console.warn("[MediaPipe FaceDetector] Load failed:", err);
+      }
+    }
+
+    loadModel();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
     if (!modelsReady || !enabled) {
-      badFrames.current = 0; statusRef.current = "ok"; setStatus("ok"); return;
+      badFrames.current = 0;
+      statusRef.current = "ok";
+      setStatus("ok");
+      if (animFrameRef.current !== null) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      return;
     }
+
     let cancelled = false;
-    const tick = async () => {
+
+    const tick = (now: number) => {
       if (cancelled) return;
-      const video = videoRef.current;
-      if (!video || video.readyState < 2 || video.paused || video.videoWidth === 0) return;
-      try {
-        const faceapi = await import("face-api.js");
-        const vw = video.videoWidth, vh = video.videoHeight;
-        if (!canvasRef.current) canvasRef.current = document.createElement("canvas");
-        const canvas = canvasRef.current;
-        if (canvas.width !== vw || canvas.height !== vh) { canvas.width = vw; canvas.height = vh; }
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-        ctx.drawImage(video, 0, 0, vw, vh);
-        const detections = await faceapi.detectAllFaces(canvas, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.3 }));
-        if (cancelled) return;
-        const n = detections.length;
-        setCount(n);
-        const raw: FaceStatus = n === 0 ? "no-face" : n > 1 ? "multiple" : "ok";
-        if (raw !== "ok") {
-          badFrames.current += 1;
-          if (badFrames.current >= GRACE_FRAMES && statusRef.current !== raw) { statusRef.current = raw; setStatus(raw); }
-        } else {
-          badFrames.current = 0;
-          if (statusRef.current !== "ok") { statusRef.current = "ok"; setStatus("ok"); }
+
+      if (now - lastPollTime.current >= POLL_INTERVAL_MS) {
+        lastPollTime.current = now;
+        const video = videoRef.current;
+        const detector = detectorRef.current;
+
+        if (
+          video && detector &&
+          video.readyState >= 2 && !video.paused &&
+          video.videoWidth > 0 &&
+          video.currentTime !== lastVideoTime.current
+        ) {
+          lastVideoTime.current = video.currentTime;
+          try {
+            const result = detector.detectForVideo(video, performance.now());
+            const n = result.detections.length;
+            setCount(n);
+
+            const raw: FaceStatus = n === 0 ? "no-face" : n > 1 ? "multiple" : "ok";
+
+            if (raw !== "ok") {
+              badFrames.current += 1;
+              if (badFrames.current >= GRACE_FRAMES && statusRef.current !== raw) {
+                statusRef.current = raw;
+                setStatus(raw);
+              }
+            } else {
+              badFrames.current = 0;
+              if (statusRef.current !== "ok") {
+                statusRef.current = "ok";
+                setStatus("ok");
+              }
+            }
+          } catch { /* swallow per-frame errors */ }
         }
-      } catch { /* swallow */ }
+      }
+
+      animFrameRef.current = requestAnimationFrame(tick);
     };
-    const intervalId = setInterval(tick, POLL_MS);
-    return () => { cancelled = true; clearInterval(intervalId); badFrames.current = 0; statusRef.current = "ok"; };
+
+    animFrameRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      cancelled = true;
+      if (animFrameRef.current !== null) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      badFrames.current = 0;
+      statusRef.current = "ok";
+    };
   }, [modelsReady, enabled, videoRef]);
 
   return { status, count, modelsReady };
 }
 
-/* ---------------------- MAIN PAGE ---------------------- */
+/* ─────────────────────────────────────────────
+   MAIN PAGE
+───────────────────────────────────────────── */
 
 export default function InterviewPage() {
   const router = useRouter();
@@ -279,7 +430,7 @@ export default function InterviewPage() {
 
   const endLockRef = useRef(false);
 
-  // ── Fullscreen state ──────────────────────────────────
+  /* ── Fullscreen ───────────────────────────────────────────────────────── */
   const [showGate, setShowGate] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fsWarningCount, setFsWarningCount] = useState(0);
@@ -288,17 +439,33 @@ export default function InterviewPage() {
   const hasEnteredFsOnce = useRef(false);
   const suppressFsExitRef = useRef(false);
 
-  // ── Tab switch state ──────────────────────────────────
+  /* ── Tab switch ───────────────────────────────────────────────────────── */
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
   const [showTabWarning, setShowTabWarning] = useState(false);
   const tabSwitchCountRef = useRef(0);
 
-  // ── Face modal state ──────────────────────────────────
+  /* ── Face modal ───────────────────────────────────────────────────────── */
   const [showFaceModal, setShowFaceModal] = useState(false);
   const [faceCountdown, setFaceCountdown] = useState(15);
   const faceCountdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── Media / recording refs ────────────────────────────
+  /* ─────────────────────────────────────────────
+     INTERRUPTION STATE  (Problem 1)
+     interruptionCount  — how many times user spoke while AI was speaking
+     Stored to Redis/backend as a negative signal.
+  ───────────────────────────────────────────── */
+  const [interruptionCount, setInterruptionCount] = useState(0);
+  const interruptionCountRef = useRef(0);
+
+  /* ─────────────────────────────────────────────
+     END REASON  (Problem 2)
+     Tracks WHY the session ended so the feedback
+     page can show appropriate messaging and the
+     backend can flag integrity issues.
+  ───────────────────────────────────────────── */
+  const endReasonRef = useRef<EndReason>("user_ended");
+
+  /* ── Media refs ───────────────────────────────────────────────────────── */
   const chatEndRef = useRef<HTMLDivElement>(null);
   const userVideoRef = useRef<HTMLVideoElement>(null);
   const aiAudioRef = useRef<HTMLAudioElement>(null);
@@ -309,20 +476,23 @@ export default function InterviewPage() {
   const isRecordingRef = useRef(false);
   const aiSourceCreatedRef = useRef(false);
 
-  // ── FIX #2: Track last question by BOTH text AND index to avoid
-  //    incorrectly de-duplicating follow-ups that reuse similar phrasing ──
-  const lastQuestionKeyRef = useRef<string>("");
-
-  // ── FIX #7: Track last submitted answer to prevent speech-recognition
-  //    from firing the same answer twice ────────────────────────────────
-  const lastAnswerRef = useRef<string>("");
+  const lastQuestionKeyRef = useRef("");
+  const lastAnswerRef = useRef("");
   const answerThrottleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const questionReceivedAtRef = useRef<number>(Date.now());
+  const firstSpeechAtRef = useRef<number | null>(null);
+  const interruptedThisAnswerRef = useRef(false);
+  const micMeterCtxRef = useRef<AudioContext | null>(null);
+  const micAnalyserRef = useRef<AnalyserNode | null>(null);
+  const micMeterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const micSampleBufferRef = useRef<MicSample[]>([]);
 
   const [micPermission, setMicPermission] = useState(false);
   const [camPermission, setCamPermission] = useState(false);
 
-  const timer = useTimer(sessionRunning);
+  const { display: timerDisplay, seconds: timerSeconds } = useTimer(sessionRunning);
 
+  /* ── Face detection ───────────────────────────────────────────────────── */
   const { status: faceStatus, count: faceCount, modelsReady } = useFaceDetection(
     userVideoRef,
     camOn && camPermission && sessionRunning && !isEnding,
@@ -330,17 +500,151 @@ export default function InterviewPage() {
 
   const { addMessage, messages, reset } = useInterviewStore();
 
-  const handleQuestionRef = useRef<(data: any) => void>(() => { });
-  const endSessionRef = useRef<(fromBackend?: boolean) => void>(() => { });
+  const endSessionRef = useRef<(fromBackend?: boolean, reason?: EndReason) => void>(() => { });
+  const abortListeningRef = useRef<() => void>(() => { });
 
-  /* ---------------------- END SESSION ---------------------- */
+  const startMicMeter = useCallback((stream: MediaStream) => {
+    if (micMeterTimerRef.current) return;
 
+    if (!micMeterCtxRef.current) {
+      micMeterCtxRef.current = new AudioContext();
+    }
+
+    const ctx = micMeterCtxRef.current;
+    if (!ctx || micAnalyserRef.current) return;
+
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+
+    source.connect(analyser);
+    micAnalyserRef.current = analyser;
+
+    const fftSize = analyser.fftSize;
+    if (!fftSize) return;
+    const frame = new Float32Array(fftSize);
+    if (!frame) return; 
+    console.log("Frame is ",frame)
+    micMeterTimerRef.current = setInterval(() => {
+      const now = Date.now();
+      
+      analyser.getFloatTimeDomainData(frame);
+
+      let sq = 0;
+      let crossings = 0;
+        for (let i = 0; i < frame?.length; i++) {
+          sq += frame[i]! * frame[i]!;
+          if (i > 0 && frame[i - 1]! <= 0 && frame[i]! > 0) crossings += 1;
+        }
+
+      const rms = Math.sqrt(sq / frame.length);
+      const zcr = crossings / frame.length;
+
+      micSampleBufferRef.current.push({ t: now, rms, zcr });
+
+      if (micSampleBufferRef.current.length > 3000) {
+        micSampleBufferRef.current.splice(
+          0,
+          micSampleBufferRef.current.length - 3000
+        );
+      }
+    }, 120);
+  }, []);
+
+  const stopMicMeter = useCallback(() => {
+    if (micMeterTimerRef.current) {
+      clearInterval(micMeterTimerRef.current);
+      micMeterTimerRef.current = null;
+    }
+    micAnalyserRef.current = null;
+    if (micMeterCtxRef.current) {
+      micMeterCtxRef.current.close().catch(() => { });
+      micMeterCtxRef.current = null;
+    }
+  }, []);
+
+  const buildAnswerAnalytics = useCallback(
+    (text: string): AnswerAnalyticsEnvelope => {
+      const submittedAt = Date.now();
+      const questionAt = questionReceivedAtRef.current || submittedAt;
+      const firstSpeechAt = firstSpeechAtRef.current;
+      const startAt = firstSpeechAt ?? questionAt;
+      const sampleWindow = micSampleBufferRef.current.filter(
+        (s) => s.t >= startAt && s.t <= submittedAt
+      );
+      const wordCount = text.split(/\s+/).filter(Boolean).length;
+
+      const activeThreshold = 0.014;
+      let active = 0;
+      let longPauseCount = 0;
+      let currentPauseMs = 0;
+      for (const sample of sampleWindow) {
+        const speaking = sample.rms > activeThreshold;
+        if (speaking) {
+          if (currentPauseMs >= 1500) longPauseCount += 1;
+          currentPauseMs = 0;
+          active += 1;
+        } else {
+          currentPauseMs += 120;
+        }
+      }
+
+      const samples = sampleWindow.length;
+      const speakingMs = active * 120;
+      const silenceMs = Math.max(0, samples * 120 - speakingMs);
+      const pauseRatio = samples > 0 ? silenceMs / (samples * 120) : 0;
+      const latency = Math.max(0, (firstSpeechAt ?? submittedAt) - questionAt);
+      const mins = Math.max(0.25, speakingMs / 60000 || (submittedAt - questionAt) / 60000);
+      const wpm = wordCount / mins;
+
+      const mean = (arr: number[]) =>
+        arr.length ? arr.reduce((acc, x) => acc + x, 0) / arr.length : 0;
+      const std = (arr: number[]) => {
+        if (!arr.length) return 0;
+        const m = mean(arr);
+        return Math.sqrt(arr.reduce((acc, x) => acc + (x - m) ** 2, 0) / arr.length);
+      };
+      const rmsValues = sampleWindow.map((s) => s.rms);
+      const zcrValues = sampleWindow.map((s) => s.zcr);
+
+      return {
+        question_received_at_ms: questionAt,
+        first_speech_at_ms: firstSpeechAt,
+        submitted_at_ms: submittedAt,
+        audio: {
+          samples,
+          active_samples: active,
+          speaking_ms: speakingMs,
+          silence_ms: silenceMs,
+          pause_ratio: Number(pauseRatio.toFixed(3)),
+          long_pause_count: longPauseCount,
+          rms_mean: Number(mean(rmsValues).toFixed(6)),
+          rms_std: Number(std(rmsValues).toFixed(6)),
+          zcr_mean: Number(mean(zcrValues).toFixed(6)),
+          zcr_std: Number(std(zcrValues).toFixed(6)),
+        },
+        speech: {
+          word_count: wordCount,
+          response_latency_ms: latency,
+          words_per_minute: Number(wpm.toFixed(2)),
+          interrupted_ai: interruptedThisAnswerRef.current,
+        },
+      };
+    },
+    [],
+  );
+
+  /* ─────────────────────────────────────────────
+     END SESSION
+  ───────────────────────────────────────────── */
   const endSession = useCallback(
-    async (fromBackend = false) => {
+    async (fromBackend = false, reason: EndReason = "user_ended") => {
       if (endLockRef.current) return;
       endLockRef.current = true;
-
       if (isEnding) return;
+
+      // Persist the reason — used in redirect URL and backend payload
+      endReasonRef.current = fromBackend ? "completed" : reason;
 
       setIsEnding(true);
       setSessionRunning(false);
@@ -351,13 +655,20 @@ export default function InterviewPage() {
 
       if (faceCountdownRef.current) clearInterval(faceCountdownRef.current);
 
-      // ── FIX #4: Guard MediaRecorder.stop() against "inactive" state ────
+      // Stop speech recognition
+      abortListeningRef.current();
+
+      // Stop AI audio
       try {
-        if (
-          isRecordingRef.current &&
-          recorderRef.current &&
-          recorderRef.current.state !== "inactive"
-        ) {
+        if (aiAudioRef.current) {
+          aiAudioRef.current.pause();
+          aiAudioRef.current.currentTime = 0;
+        }
+      } catch { /* ignore */ }
+
+      // Stop recording
+      try {
+        if (isRecordingRef.current && recorderRef.current && recorderRef.current.state !== "inactive") {
           recorderRef.current.stop();
           isRecordingRef.current = false;
         }
@@ -370,39 +681,64 @@ export default function InterviewPage() {
         audioContextRef.current = null;
       }
 
-      try {
-        userStreamRef.current?.getTracks().forEach((t) => t.stop());
-      } catch { }
+      try { userStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      stopMicMeter();
 
       if (document.fullscreenElement) {
         suppressFsExitRef.current = true;
-        try { await document.exitFullscreen(); } catch { }
+        try { await document.exitFullscreen(); } catch { /* ignore */ }
       }
 
-      // ── FIX #3: Do NOT call POST /complete from the frontend.
-      //    The Python worker emits interview:complete which triggers
-      //    endSession(true). Calling the REST endpoint here races with
-      //    the worker and can double-complete the interview.
-      //    We only notify the socket so the backend can clean up rooms. ──
       if (!fromBackend) {
         try {
-          getSocket().emit("interview:end", { interviewId });
+          getSocket().emit("interview:end", {
+            interviewId,
+            reason: endReasonRef.current,
+            durationSec: timerSeconds.current,
+          });
         } catch (e) {
           console.error("[socket end]", e);
         }
       }
 
+      /* ── Activity / completion API ──────────────────────────────────────
+         Sends end reason + interruption count so the backend can:
+           - Flag early exits in the feedback summary
+           - Record interruptionCount as a negative behavioural signal
+           - Compute an "integrity score" from violations
+      ─────────────────────────────────────────────────────────────────── */
+      try {
+        await fetch("/api/activity/complete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            interviewId,
+            endReason: endReasonRef.current,
+            interruptionCount: interruptionCountRef.current,
+            tabSwitches: tabSwitchCountRef.current,
+            fsExits: fsWarningCountRef.current,
+            sessionDurationSec: timerSeconds.current,
+          }),
+        });
+      } catch (e) {
+        console.warn("[activity] update failed:", e);
+      }
+
       reset();
+
+      // Pass reason in query so the feedback page can show contextual messages
       setTimeout(() => {
-        router.push(`/feedback/${interviewId}/`);
+        router.push(`/feedback/${interviewId}/?reason=${endReasonRef.current}`);
       }, 2000);
     },
-    [interviewId, router, reset, isEnding],
+    [interviewId, router, reset, isEnding, timerSeconds, stopMicMeter],
   );
 
   useEffect(() => { endSessionRef.current = endSession; }, [endSession]);
 
-  /* ---------------------- FULLSCREEN ---------------------- */
+  /* ─────────────────────────────────────────────
+     FULLSCREEN
+  ───────────────────────────────────────────── */
 
   const enterFullscreen = useCallback(async () => {
     try {
@@ -435,7 +771,7 @@ export default function InterviewPage() {
       const n = fsWarningCountRef.current;
       setFsWarningCount(n);
       setShowFsWarning(true);
-      if (n >= 2) setTimeout(() => endSessionRef.current(false), 800);
+      if (n >= 2) setTimeout(() => endSessionRef.current(false, "fullscreen"), 800);
     };
 
     document.addEventListener("fullscreenchange", onChange);
@@ -447,19 +783,22 @@ export default function InterviewPage() {
   }, [isEnding, sessionRunning]);
 
   const handleReenterFullscreen = useCallback(async () => {
-    if (fsWarningCountRef.current >= 2) { endSessionRef.current(false); return; }
+    if (fsWarningCountRef.current >= 2) { endSessionRef.current(false, "fullscreen"); return; }
     setShowFsWarning(false);
     await enterFullscreen();
   }, [enterFullscreen]);
 
-  /* ---------------------- FACE MODAL ---------------------- */
+  /* ─────────────────────────────────────────────
+     FACE MODAL
+  ───────────────────────────────────────────── */
 
   useEffect(() => {
     if (!modelsReady || isEnding || !sessionRunning) return;
     if (faceStatus !== "ok" && !showFaceModal) { setFaceCountdown(15); setShowFaceModal(true); }
     if (faceStatus === "ok" && showFaceModal) {
       if (faceCountdownRef.current) clearInterval(faceCountdownRef.current);
-      setShowFaceModal(false); setFaceCountdown(15);
+      setShowFaceModal(false);
+      setFaceCountdown(15);
     }
   }, [faceStatus, modelsReady, isEnding, sessionRunning, showFaceModal]);
 
@@ -467,7 +806,11 @@ export default function InterviewPage() {
     if (!showFaceModal) return;
     faceCountdownRef.current = setInterval(() => {
       setFaceCountdown((prev) => {
-        if (prev <= 1) { clearInterval(faceCountdownRef.current!); endSessionRef.current(false); return 0; }
+        if (prev <= 1) {
+          clearInterval(faceCountdownRef.current!);
+          endSessionRef.current(false, "face_violation");
+          return 0;
+        }
         return prev - 1;
       });
     }, 1000);
@@ -476,29 +819,35 @@ export default function InterviewPage() {
 
   const handleDismissFaceModal = useCallback(() => {
     if (faceCountdownRef.current) clearInterval(faceCountdownRef.current);
-    setShowFaceModal(false); setFaceCountdown(15);
+    setShowFaceModal(false);
+    setFaceCountdown(15);
   }, []);
 
-  /* ---------------------- TAB SWITCH ---------------------- */
+  /* ─────────────────────────────────────────────
+     TAB SWITCH
+  ───────────────────────────────────────────── */
 
   useEffect(() => {
     const handle = () => {
       if (document.visibilityState !== "hidden" || isEnding) return;
       tabSwitchCountRef.current += 1;
       const n = tabSwitchCountRef.current;
-      setTabSwitchCount(n); setShowTabWarning(true);
-      if (n >= 2) setTimeout(() => endSessionRef.current(false), 800);
+      setTabSwitchCount(n);
+      setShowTabWarning(true);
+      if (n >= 2) setTimeout(() => endSessionRef.current(false, "tab_switch"), 800);
     };
     document.addEventListener("visibilitychange", handle);
     return () => document.removeEventListener("visibilitychange", handle);
   }, [isEnding]);
 
   const handleDismissTabWarning = useCallback(() => {
-    if (tabSwitchCountRef.current >= 2) endSessionRef.current(false);
+    if (tabSwitchCountRef.current >= 2) endSessionRef.current(false, "tab_switch");
     else setShowTabWarning(false);
   }, []);
 
-  /* ---------------------- TTS ---------------------- */
+  /* ─────────────────────────────────────────────
+     TTS
+  ───────────────────────────────────────────── */
 
   const playAIAudio = useCallback(async (text: string) => {
     if (!aiAudioRef.current || showGate) return;
@@ -528,10 +877,10 @@ export default function InterviewPage() {
     }
   }, [showGate]);
 
-  /* ---------------------- SOCKET ---------------------- */
+  /* ─────────────────────────────────────────────
+     SOCKET
+  ───────────────────────────────────────────── */
 
-  // ── FIX #2: Deduplicate using a composite key of index + question text
-  //    so follow-ups with identical wording at a different index still fire.
   const handleQuestion = useCallback(
     (data: { question: string; index: number; difficulty: string; time?: number }) => {
       if (!data?.question) return;
@@ -544,58 +893,47 @@ export default function InterviewPage() {
         ? new Date(data.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
         : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
+      questionReceivedAtRef.current = data.time ?? Date.now();
+      firstSpeechAtRef.current = null;
+      interruptedThisAnswerRef.current = false;
+
       addMessage({ id: Date.now(), role: "ai", text: data.question, time: now });
       playAIAudio(data.question);
     },
     [addMessage, playAIAudio],
   );
 
+  const handleQuestionRef = useRef(handleQuestion);
   useEffect(() => { handleQuestionRef.current = handleQuestion; }, [handleQuestion]);
 
-  // ── FIX #5 & #6: Register socket listeners exactly once (after gate is
-  //    dismissed). Off all handlers on cleanup to prevent duplicate bindings.
-  //    FIX #1: Also clean up the "connect" reconnect listener on unmount.
-  //    FIX #6: Guard join_interview emission so it only fires when the
-  //    socket is already connected; the "connect" handler covers reconnects.
   useEffect(() => {
     if (showGate) return;
 
     const socket = getSocket();
 
     const onQuestion = (data: any) => handleQuestionRef.current(data);
-    const onComplete = () => endSessionRef.current(true);
+    const onComplete = () => endSessionRef.current(true, "completed");
 
-    // ── FIX #5: Remove stale listeners before adding fresh ones ──────────
     socket.off("interview:question", onQuestion);
     socket.off("interview:complete", onComplete);
-
     socket.on("interview:question", onQuestion);
     socket.on("interview:complete", onComplete);
 
-    // ── FIX #6: Only emit join if already connected; otherwise the
-    //    "connect" handler below will take care of it on first connect. ──
-    if (socket.connected) {
-      socket.emit("join_interview", { interviewId });
-    }
+    if (socket.connected) socket.emit("join_interview", { interviewId });
 
-    // ── FIX #1: Keep a stable reference so we can remove this exact
-    //    listener in the cleanup below (prevents listener accumulation). ──
-    const onReconnect = () => {
-      console.log("[socket] reconnected — rejoining interview room");
-      socket.emit("join_interview", { interviewId });
-    };
-
+    const onReconnect = () => socket.emit("join_interview", { interviewId });
     socket.on("connect", onReconnect);
 
     return () => {
-      // ── FIX #1: Clean up reconnect listener ─────────────────────────
       socket.off("connect", onReconnect);
       socket.off("interview:question", onQuestion);
       socket.off("interview:complete", onComplete);
     };
   }, [interviewId, showGate]);
 
-  /* ---------------------- MEDIA PERMISSIONS ---------------------- */
+  /* ─────────────────────────────────────────────
+     MEDIA PERMISSIONS
+  ───────────────────────────────────────────── */
 
   useEffect(() => {
     navigator.mediaDevices
@@ -604,13 +942,15 @@ export default function InterviewPage() {
         userStreamRef.current = stream;
         setMicPermission(true);
         setCamPermission(true);
+        startMicMeter(stream);
       })
       .catch((err) => console.error("[media]", err));
 
     return () => {
-      try { userStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch { }
+      try { userStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      stopMicMeter();
     };
-  }, []);
+  }, [startMicMeter, stopMicMeter]);
 
   useEffect(() => {
     if (userVideoRef.current && userStreamRef.current) {
@@ -618,17 +958,15 @@ export default function InterviewPage() {
     }
   }, [micPermission, camOn]);
 
-  /* ---------------------- SPEECH ---------------------- */
+  /* ─────────────────────────────────────────────
+     SUBMIT ANSWER
+  ───────────────────────────────────────────── */
 
-  // ── FIX #7: Deduplicate and throttle speech-recognition submissions.
-  //    If the recogniser fires the same transcript within 2 s, drop it.
   const submitAnswer = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      if (trimmed === lastAnswerRef.current) return; // exact duplicate
-
-      // Throttle: ignore if another answer was sent in the last 2 s
+      if (trimmed === lastAnswerRef.current) return;
       if (answerThrottleRef.current) return;
 
       lastAnswerRef.current = trimmed;
@@ -641,33 +979,103 @@ export default function InterviewPage() {
       setInput("");
 
       if (!endLockRef.current) {
-        getSocket().emit("submit_answer", { interviewId, answer: trimmed });
+        const analytics = buildAnswerAnalytics(trimmed);
+        getSocket().emit("submit_answer", {
+          interviewId,
+          answer: {
+            text: trimmed,
+            analytics,
+          },
+        });
       }
 
+      firstSpeechAtRef.current = null;
+      interruptedThisAnswerRef.current = false;
       setAiSpeaking(true);
     },
-    [addMessage, interviewId],
+    [addMessage, interviewId, buildAnswerAnalytics],
   );
 
-  const { transcript, startListening, stopListening } = useSpeechToText(
-    (finalText) => submitAnswer(finalText),
-  );
+  /* ─────────────────────────────────────────────
+     SPEECH TO TEXT  (Problem 1 + Problem 3)
 
-  const startListeningRef = useRef(startListening);
-  const stopListeningRef = useRef(stopListening);
-  useEffect(() => { startListeningRef.current = startListening; }, [startListening]);
-  useEffect(() => { stopListeningRef.current = stopListening; }, [stopListening]);
+     onSpeechStart  — fires the instant the browser detects ANY sound.
+                      If AI is speaking at that moment:
+                        1. Pause + reset AI audio immediately (interrupt)
+                        2. Increment the interruptionCount (negative signal)
+                        3. Emit the count to the socket for backend logging
 
+     onFinalMessage — fires only after `silenceThresholdMs` (3 s) of silence.
+                      Receives the FULL accumulated answer, not just the last chunk.
+  ───────────────────────────────────────────── */
+
+  const aiSpeakingRef = useRef(aiSpeaking);
+  useEffect(() => { aiSpeakingRef.current = aiSpeaking; }, [aiSpeaking]);
+
+  const { transcript, isListening, startListening, stopListening, abortListening } =
+    useSpeechToText({
+      silenceThresholdMs: 3000,
+
+      onSpeechStart: useCallback(() => {
+        if (!firstSpeechAtRef.current) {
+          firstSpeechAtRef.current = Date.now();
+        }
+
+        // Only count as interruption if AI was actually speaking
+        if (!aiSpeakingRef.current) return;
+        interruptedThisAnswerRef.current = true;
+
+        // 1. Stop AI audio immediately
+        if (aiAudioRef.current) {
+          aiAudioRef.current.pause();
+          aiAudioRef.current.currentTime = 0;
+        }
+        setAiSpeaking(false);
+
+        // 2. Track interruption
+        interruptionCountRef.current += 1;
+        const count = interruptionCountRef.current;
+        setInterruptionCount(count);
+
+        // 3. Notify backend in real-time so it's logged even if session ends mid-interview
+        try {
+          getSocket().emit("interview:interruption", {
+            interviewId,
+            count,
+            timestamp: Date.now(),
+          });
+        } catch (e) {
+          console.warn("[interruption] socket emit failed:", e);
+        }
+      }, [interviewId]),
+
+      // Receives the FULL accumulated answer after 3 s of silence
+      onFinalMessage: submitAnswer,
+    });
+
+  // Keep abortListening ref fresh for endSession
+  useEffect(() => { abortListeningRef.current = abortListening; }, [abortListening]);
+
+  // Sync transcript into the textarea
   useEffect(() => { if (transcript) setInput(transcript); }, [transcript]);
 
+  /* ── Start / stop listening based on mic toggle and AI speaking state ── */
   useEffect(() => {
     if (showGate) return;
-    if (micOn && !aiSpeaking) startListeningRef.current();
-    else stopListeningRef.current();
-    return () => { stopListeningRef.current(); };
-  }, [micOn, aiSpeaking, showGate]);
+    if (micOn && !aiSpeaking) {
+      startListening();
+    } else {
+      // When AI starts speaking we stop the recogniser entirely so there's
+      // no accidental capture of the AI's own voice (echo). The `onSpeechStart`
+      // callback will re-enable it the moment the user speaks.
+      stopListening();
+    }
+    return () => { stopListening(); };
+  }, [micOn, aiSpeaking, showGate, startListening, stopListening]);
 
-  /* ---------------------- RECORDING ---------------------- */
+  /* ─────────────────────────────────────────────
+     RECORDING
+  ───────────────────────────────────────────── */
 
   const startRecording = useCallback(() => {
     if (!userStreamRef.current || isRecordingRef.current) return;
@@ -678,17 +1086,31 @@ export default function InterviewPage() {
       audioContextRef.current = audioContext;
       const mixedDest = audioContext.createMediaStreamDestination();
       audioContext.createMediaStreamSource(stream).connect(mixedDest);
+
       if (aiAudioRef.current && !aiSourceCreatedRef.current) {
         const aiSource = audioContext.createMediaElementSource(aiAudioRef.current);
-        aiSource.connect(mixedDest); aiSource.connect(audioContext.destination);
+        aiSource.connect(mixedDest);
+        aiSource.connect(audioContext.destination);
         aiSourceCreatedRef.current = true;
       }
-      const mixedStream = new MediaStream([...stream.getVideoTracks(), ...mixedDest.stream.getAudioTracks()]);
-      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus") ? "video/webm;codecs=vp9,opus" : "video/webm";
+
+      const mixedStream = new MediaStream([
+        ...stream.getVideoTracks(),
+        ...mixedDest.stream.getAudioTracks(),
+      ]);
+
+      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+        ? "video/webm;codecs=vp9,opus"
+        : "video/webm";
+
       const recorder = new MediaRecorder(mixedStream, { mimeType });
       recorderRef.current = recorder;
       chunksRef.current = [];
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
       recorder.onstop = async () => {
         const blob = new Blob(chunksRef.current, { type: "video/webm" });
         const fd = new FormData();
@@ -696,50 +1118,63 @@ export default function InterviewPage() {
         fd.append("interviewId", interviewId);
         await fetch("/api/save-recording", { method: "POST", body: fd });
       };
+
       recorder.start(1000);
-    } catch (err) { console.error("[recording]", err); isRecordingRef.current = false; }
+    } catch (err) {
+      console.error("[recording]", err);
+      isRecordingRef.current = false;
+    }
   }, [interviewId]);
 
   useEffect(() => {
     if (micPermission && camPermission && !isRecordingRef.current) startRecording();
   }, [micPermission, camPermission, startRecording]);
 
-  /* ---------------------- CHAT ---------------------- */
+  /* ─────────────────────────────────────────────
+     CHAT SCROLL
+  ───────────────────────────────────────────── */
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
-  const sendMessage = () => {
-    submitAnswer(input);
-  };
+  const sendMessage = () => { submitAnswer(input); };
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
-  const showFaceBanner = camOn && camPermission && modelsReady && faceStatus !== "ok" && !showFaceModal;
+  const showFaceBanner =
+    camOn && camPermission && modelsReady && faceStatus !== "ok" && !showFaceModal;
 
-  /* ---------------------- RENDER ---------------------- */
+  /* ─────────────────────────────────────────────
+     RENDER
+  ───────────────────────────────────────────── */
 
   return (
     <>
       <div className="noise" />
 
-      {/* One-click fullscreen gate */}
       {showGate && <FullscreenGate onEnter={handleGateEnter} />}
 
-      {/* Fullscreen exit warnings */}
       {!showGate && showFsWarning && (
         <FullscreenWarningModal count={fsWarningCount} onReenter={handleReenterFullscreen} />
       )}
 
       {showFaceModal && (
-        <FaceViolationModal status={faceStatus as "no-face" | "multiple"} countdown={faceCountdown} onDismiss={handleDismissFaceModal} />
+        <FaceViolationModal
+          status={faceStatus as "no-face" | "multiple"}
+          countdown={faceCountdown}
+          onDismiss={handleDismissFaceModal}
+        />
       )}
+
       {showTabWarning && (
         <TabSwitchWarningModal count={tabSwitchCount} onDismiss={handleDismissTabWarning} />
       )}
 
       <div className="interview-root">
+        {/* ── TOPBAR ─────────────────────────────────────────────────────── */}
         <header className="interview-topbar">
           <div className="topbar-left">
             <Link href="/dashboard" className="topbar-logo">
@@ -758,20 +1193,30 @@ export default function InterviewPage() {
               LIVE
             </div>
             <div className="timer-block">
-              <span className="timer">{timer}</span>
+              <span className="timer">{timerDisplay}</span>
             </div>
           </div>
 
           <div className="topbar-right">
-            {/* Manual fullscreen toggle */}
+            {/* Fullscreen toggle */}
             <button
               onClick={() =>
                 isFullscreen
-                  ? (() => { suppressFsExitRef.current = true; document.exitFullscreen().catch(() => { }); })()
+                  ? (() => {
+                    suppressFsExitRef.current = true;
+                    document.exitFullscreen().catch(() => { });
+                  })()
                   : enterFullscreen()
               }
               title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
-              style={{ display: "flex", alignItems: "center", gap: "5px", padding: "4px 10px", borderRadius: "99px", background: isFullscreen ? "rgba(139,92,246,0.12)" : "rgba(255,255,255,0.06)", border: `1px solid ${isFullscreen ? "rgba(139,92,246,0.35)" : "rgba(255,255,255,0.1)"}`, color: isFullscreen ? "#a78bfa" : "#6b7280", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}
+              style={{
+                display: "flex", alignItems: "center", gap: "5px",
+                padding: "4px 10px", borderRadius: "99px",
+                background: isFullscreen ? "rgba(139,92,246,0.12)" : "rgba(255,255,255,0.06)",
+                border: `1px solid ${isFullscreen ? "rgba(139,92,246,0.35)" : "rgba(255,255,255,0.1)"}`,
+                color: isFullscreen ? "#a78bfa" : "#6b7280",
+                fontSize: "12px", fontWeight: 600, cursor: "pointer",
+              }}
             >
               {isFullscreen
                 ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M8 3v3a2 2 0 01-2 2H3M21 8h-3a2 2 0 01-2-2V3M3 16h3a2 2 0 012 2v3M16 21v-3a2 2 0 012-2h3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -780,36 +1225,48 @@ export default function InterviewPage() {
               {isFullscreen ? "Exit FS" : "Fullscreen"}
             </button>
 
+            {/* FS exit counter */}
             {fsWarningCount > 0 && !isEnding && (
               <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 10px", borderRadius: "99px", background: "rgba(139,92,246,0.1)", border: "1px solid rgba(139,92,246,0.3)", fontSize: "12px", color: "#a78bfa", fontWeight: 600 }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M16 21h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 FS exits: {fsWarningCount}/2
               </div>
             )}
+
+            {/* Tab switch counter */}
             {tabSwitchCount > 0 && (
               <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 10px", borderRadius: "99px", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", fontSize: "12px", color: "#f59e0b", fontWeight: 600 }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 Tab switches: {tabSwitchCount}/2
               </div>
             )}
+
+            {/* Face violation indicator */}
             {modelsReady && faceStatus !== "ok" && (
               <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "4px 10px", borderRadius: "99px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", fontSize: "12px", color: "#ef4444", fontWeight: 600 }}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 {faceStatus === "multiple" ? `${faceCount} faces` : "No face"}
               </div>
             )}
-            <div className="score-preview">
-              <span className="score-preview-label">Score</span>
-              <span className="score-preview-value score-high">78</span>
-            </div>
-            <button className="btn-end-session" onClick={() => endSession(false)} disabled={isEnding}>
+
+            {/* Interruption badge — NEW */}
+            <InterruptionBadge count={interruptionCount} />
+
+            <button
+              className="btn-end-session"
+              onClick={() => endSession(false, "user_ended")}
+              disabled={isEnding}
+            >
               {isEnding ? "Ending…" : "End Session"}
             </button>
           </div>
         </header>
 
+        {/* ── BODY ───────────────────────────────────────────────────────── */}
         <div className="interview-body">
+          {/* ── VIDEO AREA ──────────────────────────────────────────────── */}
           <div className="video-area">
+            {/* AI video card */}
             <div className={`vid-card vid-ai${aiSpeaking ? " speaking" : ""}`}>
               <div className="vid-inner">
                 <div className="vid-placeholder vid-placeholder-ai">
@@ -824,7 +1281,9 @@ export default function InterviewPage() {
                 </div>
                 <div className="vid-speaking-bar">
                   <WaveBars active={aiSpeaking} />
-                  <span className="vid-speaking-label">{aiSpeaking ? "AI is speaking…" : "Listening"}</span>
+                  <span className="vid-speaking-label">
+                    {aiSpeaking ? "AI is speaking…" : "Listening"}
+                  </span>
                 </div>
               </div>
               <div className="vid-nametag">
@@ -833,7 +1292,11 @@ export default function InterviewPage() {
               </div>
             </div>
 
-            <div className={`vid-card vid-user${!camOn ? " cam-off" : ""}`} style={{ position: "relative" }}>
+            {/* User video card */}
+            <div
+              className={`vid-card vid-user${!camOn ? " cam-off" : ""}`}
+              style={{ position: "relative" }}
+            >
               {showFaceBanner && <FaceStatusBanner status={faceStatus as "no-face" | "multiple"} />}
               <div className="vid-inner">
                 {camOn && micPermission ? (
@@ -842,7 +1305,11 @@ export default function InterviewPage() {
                       <video ref={userVideoRef} autoPlay muted playsInline />
                     </div>
                     {[...Array(8)].map((_, i) => (
-                      <div key={i} className="bokeh" style={{ left: `${10 + i * 11}%`, top: `${20 + (i % 3) * 25}%`, animationDelay: `${i * 0.3}s`, zIndex: 0 }} />
+                      <div
+                        key={i}
+                        className="bokeh"
+                        style={{ left: `${10 + i * 11}%`, top: `${20 + (i % 3) * 25}%`, animationDelay: `${i * 0.3}s`, zIndex: 0 }}
+                      />
                     ))}
                   </div>
                 ) : (
@@ -856,11 +1323,30 @@ export default function InterviewPage() {
                 <span className="dot-accent-static dot-user" />
                 <span className="vid-name"></span>
                 <span className="tag tag-sky">You</span>
+                {/* Live mic indicator */}
+                {isListening && micOn && !aiSpeaking && (
+                  <span style={{
+                    marginLeft: "6px", fontSize: "10px", color: "#22c55e",
+                    fontWeight: 600, display: "flex", alignItems: "center", gap: "4px",
+                  }}>
+                    <span style={{
+                      width: 6, height: 6, borderRadius: "50%",
+                      background: "#22c55e",
+                      animation: "pulse 1s ease infinite",
+                      display: "inline-block",
+                    }} />
+                    Listening
+                  </span>
+                )}
               </div>
             </div>
 
+            {/* Controls */}
             <div className="controls-bar">
-              <button className={`ctrl-btn${!micOn ? " ctrl-off" : ""}`} onClick={() => setMicOn((p) => !p)}>
+              <button
+                className={`ctrl-btn${!micOn ? " ctrl-off" : ""}`}
+                onClick={() => setMicOn((p) => !p)}
+              >
                 {micOn ? (
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="9" y="2" width="6" height="12" rx="3" stroke="currentColor" strokeWidth="1.8" /><path d="M5 10a7 7 0 0014 0M12 19v3M9 22h6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
                 ) : (
@@ -868,7 +1354,10 @@ export default function InterviewPage() {
                 )}
                 <span>{micOn ? "Mute" : "Unmute"}</span>
               </button>
-              <button className={`ctrl-btn${!camOn ? " ctrl-off" : ""}`} onClick={() => setCamOn((v) => !v)}>
+              <button
+                className={`ctrl-btn${!camOn ? " ctrl-off" : ""}`}
+                onClick={() => setCamOn((v) => !v)}
+              >
                 {camOn ? (
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
                 ) : (
@@ -876,21 +1365,34 @@ export default function InterviewPage() {
                 )}
                 <span>{camOn ? "Camera" : "No cam"}</span>
               </button>
-              <button className="ctrl-btn ctrl-btn-end" onClick={() => endSession(false)} disabled={isEnding}>
+              <button
+                className="ctrl-btn ctrl-btn-end"
+                onClick={() => endSession(false, "user_ended")}
+                disabled={isEnding}
+              >
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6.827 6.175A8 8 0 0117.173 17.173M12 6v6l4 2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /><path d="M3.05 11a9 9 0 1017.9 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
                 <span>End</span>
               </button>
             </div>
           </div>
 
+          {/* ── CHAT PANEL ──────────────────────────────────────────────── */}
           <aside className="chat-panel">
             <div className="chat-header">
-              <div className="chat-header-left"><span className="chat-icon">◎</span><span className="chat-title">Transcript</span></div>
+              <div className="chat-header-left">
+                <span className="chat-icon">◎</span>
+                <span className="chat-title">Transcript</span>
+              </div>
               <span className="chat-count">{messages.length} msgs</span>
             </div>
+
             <div className="chat-messages">
               {messages.map((m, i) => (
-                <div key={m.id} className={`chat-msg chat-msg-${m.role}`} style={{ animationDelay: `${i * 40}ms` }}>
+                <div
+                  key={m.id}
+                  className={`chat-msg chat-msg-${m.role}`}
+                  style={{ animationDelay: `${i * 40}ms` }}
+                >
                   {m.role === "ai" && <div className="chat-msg-avatar chat-msg-avatar-ai">AI</div>}
                   <div className="chat-msg-body">
                     <div className="chat-bubble">{m.text}</div>
@@ -899,6 +1401,7 @@ export default function InterviewPage() {
                   {m.role === "user" && <div className="chat-msg-avatar chat-msg-avatar-user">AR</div>}
                 </div>
               ))}
+
               {aiSpeaking && (
                 <div className="chat-msg chat-msg-ai">
                   <div className="chat-msg-avatar chat-msg-avatar-ai">AI</div>
@@ -911,8 +1414,10 @@ export default function InterviewPage() {
                   </div>
                 </div>
               )}
+
               <div ref={chatEndRef} />
             </div>
+
             <div className="chat-input-wrap">
               <textarea
                 className="chat-input"
@@ -922,8 +1427,15 @@ export default function InterviewPage() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKey}
               />
-              <button className="chat-send-btn" onClick={sendMessage} disabled={!input.trim()} aria-label="Send">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2L15 22 11 13 2 9l20-7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              <button
+                className="chat-send-btn"
+                onClick={sendMessage}
+                disabled={!input.trim()}
+                aria-label="Send"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                  <path d="M22 2L11 13M22 2L15 22 11 13 2 9l20-7z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
               </button>
             </div>
           </aside>

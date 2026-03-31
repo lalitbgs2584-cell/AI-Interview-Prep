@@ -13,12 +13,6 @@ export default function SignInPage() {
   const [focused, setFocused] = useState<string | null>(null);
   const router = useRouter();
 
-  // ✅ useEffect at top level — redirects already-logged-in users
-  useEffect(() => {
-    authClient.getSession().then(({ data }) => {
-      if (data?.session) router.push("/dashboard");
-    });
-  }, []);
 
   const handleEmailSignIn = async () => {
     setLoading(true);

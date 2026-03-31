@@ -1,0 +1,75 @@
+/* ══════════════════════════════════════
+   animations.css  —  Keyframes & Utils
+══════════════════════════════════════ */
+
+/* ── Entry animations ── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(24px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+
+@keyframes fadeDown {
+  from { opacity: 0; transform: translateY(-16px); }
+  to   { opacity: 1; transform: translateY(0);     }
+}
+
+/* ── Looping effects ── */
+@keyframes dotPulse {
+  0%, 100% { opacity: 1;    transform: scale(1);   }
+  50%       { opacity: 0.25; transform: scale(0.6); }
+}
+
+@keyframes orbPulse {
+  0%, 100% { box-shadow: 0 0 0 0  rgba(255,92,53,0),    0 0 20px rgba(255,92,53,0.10); }
+  50%       { box-shadow: 0 0 0 6px rgba(255,92,53,0.07), 0 0 40px rgba(255,92,53,0.22); }
+}
+
+@keyframes orbFloat {
+  0%,  100% { transform: translate(0,    0)    scale(1);    }
+  33%        { transform: translate(30px,-20px) scale(1.05); }
+  66%        { transform: translate(-20px,15px) scale(0.95); }
+}
+
+@keyframes chipBlink {
+  0%, 100% { border-color: rgba(255,92,53,0.20); background: rgba(255,92,53,0.05); }
+  50%       { border-color: rgba(255,92,53,0.55); background: rgba(255,92,53,0.11); }
+}
+
+@keyframes barGrow {
+  from { width: 0 !important; }
+}
+
+@keyframes readyPulse {
+  0%, 100% { box-shadow: var(--shadow-accent), 0 0 30px rgba(255,92,53,0.25); }
+  50%       { box-shadow: var(--shadow-accent), 0 0 55px rgba(255,92,53,0.45); }
+}
+
+@keyframes shimmer {
+  0%   { left: -100%; }
+  100% { left:  200%; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes profileFadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+/* ── Staggered fade-up helpers ── */
+.anim-0 { animation: fadeUp var(--dur-slow) 0.00s var(--ease-snap) both; }
+.anim-1 { animation: fadeUp var(--dur-slow) 0.08s var(--ease-snap) both; }
+.anim-2 { animation: fadeUp var(--dur-slow) 0.16s var(--ease-snap) both; }
+.anim-3 { animation: fadeUp var(--dur-slow) 0.24s var(--ease-snap) both; }
+
+/* ── Reduced-motion override ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .noise { display: none; }
+}

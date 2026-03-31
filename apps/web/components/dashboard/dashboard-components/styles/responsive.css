@@ -1,0 +1,48 @@
+/* ══════════════════════════════════════
+   responsive.css  —  Breakpoint Overrides
+   (profile breakpoints live in profile.css)
+══════════════════════════════════════ */
+
+@media (max-width: 1100px) {
+  :root { --sidebar-w: 200px; }
+  .stats-grid             { grid-template-columns: repeat(2, 1fr); }
+  .overview-grid          { grid-template-columns: 1fr; }
+  .interview-type-grid    { grid-template-columns: 1fr 1fr; }
+  .resume-section-grid    { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 768px) {
+  .dash-root { grid-template-columns: 1fr; }
+
+  .mobile-menu-btn  { display: flex; }
+  .sidebar-overlay  { display: block; }
+  .sidebar-close-btn { display: flex; }
+
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    height: 100vh;
+    width: var(--sidebar-w);
+    z-index: 999;
+    transform: translateX(-100%);
+    animation: none;
+    transition:
+      transform   var(--dur-slow) var(--ease-snap),
+      box-shadow  var(--dur-slow) var(--ease-out);
+  }
+  .sidebar.open { transform: translateX(0); box-shadow: 6px 0 48px rgba(0,0,0,0.7); }
+
+  .dash-main           { padding: 1.25rem 1rem; padding-top: 4.5rem; }
+  .stats-grid          { grid-template-columns: repeat(2, 1fr); }
+  .quick-grid          { grid-template-columns: 1fr; }
+  .dash-topbar         { flex-direction: column; align-items: flex-start; }
+  .topbar-actions      { width: 100%; flex-direction: column; align-items: stretch; }
+  .btn-upload-resume   { max-width: 100%; justify-content: center; }
+  .btn-new-session     { width: 100%; justify-content: center; }
+  .interview-type-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 480px) {
+  .stats-grid    { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+  .session-title { max-width: 180px; }
+}

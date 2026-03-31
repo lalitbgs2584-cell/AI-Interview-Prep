@@ -10,11 +10,14 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from neo4j import GraphDatabase
 from app.core.s3_client import download_resume
+from app.system_prompts.structure_node_prompts import structure_node_prompt
+from app.system_prompts.ats_score_prompt import ats_score_prompt
 from app.core.config import settings
 from app.graph.state.resume_processing_state import ResumeProcessState
 from app.workers.convert_pdf_to_image_worker import ocr_images_with_openai
 import fitz, json, re, uuid
 from app.core.redis_client import client
+
 # =========================
 # Models & Clients
 # =========================
@@ -128,7 +131,7 @@ def clean_node(state: ResumeProcessState):
 def structured_node(state: ResumeProcessState):
     """
     Uses GPT-4o to extract structured fields from cleaned_text.
-    Returns only the 5 structured keys (or 'error' on failure).
+    Returns only the 7 structured keys (or 'error' on failure).
     """
     print("Structured Node Started")
     try:
@@ -137,32 +140,7 @@ def structured_node(state: ResumeProcessState):
         if not cleaned_text:
             return {"error": "cleaned_text is empty"}
 
-        prompt = f"""You are an expert resume parser.
-
-Your job is to extract structured information from the resume text below.
-
-INSTRUCTIONS:
-- Return ONLY a valid JSON object. No explanation, no markdown, no backticks.
-- If a section does not exist in the resume, return an empty list [] for that key.
-- Always return all 5 keys: skills, work_experience, education, projects, extracurricular.
-- For 
-kills: extract EVERYTHING from "Coursework / Skills", "Technical Skills", or any section listing technologies, languages, tools, frameworks, or concepts.
-- Do not skip tools like Git, GitHub, VS Code, or AI frameworks like LangChain, LangGraph.
-- For work_experience: if no formal jobs exist, return [].
-- Do not merge separate entries. Each project, role, or activity is its own object.
-
-OUTPUT FORMAT (return exactly this structure):
-{{
-  "skills": [{{"name": "Python", "category": "Language"}}],
-  "work_experience": [{{"company": "", "role": "", "duration": "", "description": ""}}],
-  "education": [{{"institution": "", "degree": "", "duration": "", "grade": ""}}],
-  "projects": [{{"title": "", "tech_stack": [], "description": ""}}],
-  "extracurricular": [{{"title": "", "organization": "", "duration": "", "description": ""}}]
-}}
-
-RESUME:
-{cleaned_text}
-"""
+        prompt = structure_node_prompt(cleaned_text)
         response = llm.invoke(prompt)
         raw_content = response.content.strip()
         raw_content = re.sub(r"^```json|^```|```$", "", raw_content, flags=re.MULTILINE).strip()
@@ -177,6 +155,9 @@ RESUME:
             "education":        data.get("education", []),
             "projects":         data.get("projects", []),
             "extracurricular":  data.get("extracurricular", []),
+            "key_skills": data.get("key_skills",[]),
+            "strong_domains": data.get("strong_domains",[]),
+            "experience_level": data.get("experience_level",0)
         }
 
     except json.JSONDecodeError as e:
@@ -186,7 +167,60 @@ RESUME:
         print("Structured node error:", str(e))
         return {"error": str(e)}
 
+def ats_score_checker(state: ResumeProcessState):
+    """
+    Scores the resume against ATS criteria using cleaned_text and structured data.
+    Returns only 'ats_score' (0–100).
+    """
+    print("ATS Score Node Started")
+    try:
+        cleaned_text     = state.get("cleaned_text", "").strip()
+        skills           = state.get("skills", [])
+        work_experience  = state.get("work_experience", [])
+        education        = state.get("education", [])
+        projects         = state.get("projects", [])
+        extracurricular  = state.get("extracurricular", [])
+        experience_level = state.get("experience_level", 0)
+        key_skills       = state.get("key_skills", [])
+        strong_domains   = state.get("strong_domains", [])
 
+        if not cleaned_text:
+            return {"error": "cleaned_text is empty — cannot compute ATS score"}
+
+        prompt = ats_score_prompt(
+            cleaned_text=cleaned_text,
+            skills=skills,
+            key_skills=key_skills,
+            strong_domains=strong_domains,
+            work_experience=work_experience,
+            education=education,
+            experience_level=experience_level,
+            extracurricular=extracurricular,
+            projects=projects
+            )
+
+        response = llm.invoke(prompt)
+        raw_content = response.content.strip()
+        raw_content = re.sub(r"^```json|^```|```$", "", raw_content, flags=re.MULTILINE).strip()
+        data = json.loads(raw_content)
+
+        total_score = int(data.get("total_score", 0))
+        # Clamp to 0–100 as a safety net
+        total_score = max(0, min(100, total_score))
+
+        print(f"ATS Score: {total_score}")
+        print(f"Dimension breakdown: {json.dumps(data.get('dimension_scores', {}), indent=2)}")
+        print(f"Critical gaps: {data.get('critical_gaps', [])}")
+
+        return {"ats_score": total_score}
+
+    except json.JSONDecodeError as e:
+        print("ATS JSON parse error:", str(e))
+        return {"error": f"ATS score JSON decode failed: {str(e)}"}
+    except Exception as e:
+        print("ATS node error:", str(e))
+        return {"error": str(e)}
+    
 def chunk_node(state: ResumeProcessState):
     """
     Splits cleaned_text into overlapping chunks using RecursiveCharacterTextSplitter.
@@ -226,40 +260,84 @@ def store_neo4j_node(state: ResumeProcessState):
     Stores structured resume data as a graph in Neo4j.
     Uses user_id as the central Candidate node — one node per user,
     updated on every re-upload rather than creating duplicates.
+
+    Strategy on re-upload:
+      - Candidate node is MERGEd (never duplicated).
+      - All child nodes (Education, WorkExperience, Project, Extracurricular)
+        are DELETED and recreated so stale data never accumulates.
+      - Skills are MERGEd globally (shared across candidates) and
+        the relationship is re-MERGEd so no duplicate edges appear.
+
     Returns only 'neo4j_node_id', 'neo4j_node_ids', 'stored_in_neo4j'.
     """
     print("Store Neo4j Node Started")
     try:
-        file_id = state.get("file_id", str(uuid.uuid4()))
-        user_id = state.get("user_id", "unknown")
+        file_id          = state.get("file_id", str(uuid.uuid4()))
+        user_id          = state.get("user_id", "unknown")
+        experience_level = state.get("experience_level", 0)
+        ats_score        = state.get("ats_score", 0)
+        key_skills       = state.get("key_skills", [])
+        strong_domains   = state.get("strong_domains", [])
 
         node_ids = {
-            "candidate": None,
-            "skills": [],
-            "education": [],
+            "candidate":      None,
+            "skills":         [],
+            "education":      [],
             "work_experience": [],
-            "projects": [],
+            "projects":       [],
             "extracurricular": [],
         }
 
         with neo4j_driver.session() as session:
 
-            # ── 1. Central Candidate node keyed on user_id ──
+            # ── 1. Candidate node (MERGE — one per user) ──────────────────
             result = session.run(
                 """
                 MERGE (c:Candidate {user_id: $user_id})
-                SET c.file_id      = $file_id,
-                    c.s3_file_name = $s3_file_name,
-                    c.updated_at   = timestamp()
+                SET c.file_id          = $file_id,
+                    c.s3_file_name     = $s3_file_name,
+                    c.experience_level = $experience_level,
+                    c.ats_score        = $ats_score,
+                    c.key_skills       = $key_skills,
+                    c.strong_domains   = $strong_domains,
+                    c.updated_at       = timestamp()
                 RETURN elementId(c) AS node_id
                 """,
                 user_id=user_id,
                 file_id=file_id,
                 s3_file_name=state.get("s3_file_name", ""),
+                experience_level=experience_level,
+                ats_score=ats_score,
+                key_skills=key_skills,
+                strong_domains=strong_domains,
             )
             node_ids["candidate"] = result.single()["node_id"]
 
-            # ── 2. Skills ──
+            # ── 2. Purge stale child nodes before recreating ──────────────
+            # Skills are global nodes (not owned by one candidate), so we
+            # only detach the relationships — never delete the Skill nodes.
+            session.run(
+                """
+                MATCH (c:Candidate {user_id: $user_id})
+                OPTIONAL MATCH (c)-[:HAS_EDUCATION]->(e:Education)
+                OPTIONAL MATCH (c)-[:HAS_EXPERIENCE]->(w:WorkExperience)
+                OPTIONAL MATCH (c)-[:HAS_PROJECT]->(p:Project)
+                OPTIONAL MATCH (c)-[:HAS_EXTRACURRICULAR]->(x:Extracurricular)
+                DETACH DELETE e, w, p, x
+                """,
+                user_id=user_id,
+            )
+
+            # Detach old skill relationships (keep the shared Skill nodes)
+            session.run(
+                """
+                MATCH (c:Candidate {user_id: $user_id})-[r:HAS_SKILL]->()
+                DELETE r
+                """,
+                user_id=user_id,
+            )
+
+            # ── 3. Skills (MERGE globally, MERGE relationship) ────────────
             for skill in state.get("skills", []):
                 result = session.run(
                     """
@@ -272,9 +350,11 @@ def store_neo4j_node(state: ResumeProcessState):
                     name=skill.get("name", ""),
                     category=skill.get("category", ""),
                 )
-                node_ids["skills"].append(result.single()["node_id"])
+                row = result.single()
+                if row:
+                    node_ids["skills"].append(row["node_id"])
 
-            # ── 3. Education ──
+            # ── 4. Education ──────────────────────────────────────────────
             for edu in state.get("education", []):
                 result = session.run(
                     """
@@ -294,9 +374,11 @@ def store_neo4j_node(state: ResumeProcessState):
                     duration=edu.get("duration", ""),
                     grade=edu.get("grade", ""),
                 )
-                node_ids["education"].append(result.single()["node_id"])
+                row = result.single()
+                if row:
+                    node_ids["education"].append(row["node_id"])
 
-            # ── 4. Work Experience ──
+            # ── 5. Work Experience ────────────────────────────────────────
             for exp in state.get("work_experience", []):
                 result = session.run(
                     """
@@ -316,9 +398,11 @@ def store_neo4j_node(state: ResumeProcessState):
                     duration=exp.get("duration", ""),
                     description=exp.get("description", ""),
                 )
-                node_ids["work_experience"].append(result.single()["node_id"])
+                row = result.single()
+                if row:
+                    node_ids["work_experience"].append(row["node_id"])
 
-            # ── 5. Projects ──
+            # ── 6. Projects ───────────────────────────────────────────────
             for proj in state.get("projects", []):
                 result = session.run(
                     """
@@ -336,9 +420,11 @@ def store_neo4j_node(state: ResumeProcessState):
                     tech_stack=proj.get("tech_stack", []),
                     description=proj.get("description", ""),
                 )
-                node_ids["projects"].append(result.single()["node_id"])
+                row = result.single()
+                if row:
+                    node_ids["projects"].append(row["node_id"])
 
-            # ── 6. Extracurricular ──
+            # ── 7. Extracurricular ────────────────────────────────────────
             for extra in state.get("extracurricular", []):
                 result = session.run(
                     """
@@ -358,11 +444,16 @@ def store_neo4j_node(state: ResumeProcessState):
                     duration=extra.get("duration", ""),
                     description=extra.get("description", ""),
                 )
-                node_ids["extracurricular"].append(result.single()["node_id"])
+                row = result.single()
+                if row:
+                    node_ids["extracurricular"].append(row["node_id"])
 
-        print(f"Neo4j: Candidate node ID : {node_ids['candidate']}")
-        print(f"Neo4j: Skills stored     : {len(node_ids['skills'])}")
-        print(f"Neo4j: Projects stored   : {len(node_ids['projects'])}")
+        print(f"Neo4j: Candidate node ID  : {node_ids['candidate']}")
+        print(f"Neo4j: Skills stored      : {len(node_ids['skills'])}")
+        print(f"Neo4j: Education stored   : {len(node_ids['education'])}")
+        print(f"Neo4j: Experience stored  : {len(node_ids['work_experience'])}")
+        print(f"Neo4j: Projects stored    : {len(node_ids['projects'])}")
+        print(f"Neo4j: Extra stored       : {len(node_ids['extracurricular'])}")
 
         return {
             "neo4j_node_id":   node_ids["candidate"],
@@ -432,25 +523,34 @@ def merge_node(state: ResumeProcessState) -> ResumeProcessState:
 def store_neon_node(state: ResumeProcessState):
     print("Storing in neon node started.")
     payload = {
-        "user_id":       state.get("user_id"),
-        "file_id":       state.get("file_id"),
-        "s3_file_name":  state.get("s3_file_name"),
+        "user_id":          state.get("user_id"),
+        "file_id":          state.get("file_id"),
+        "s3_file_name":     state.get("s3_file_name"),
         "neo4j_node_id":    state.get("neo4j_node_id"),
         "qdrant_point_ids": state.get("qdrant_point_ids"),
         "stored_in_neo4j":  state.get("stored_in_neo4j"),
         "stored_in_qdrant": state.get("stored_in_qdrant"),
-        "skills":          state.get("skills"),
-        "work_experience": state.get("work_experience"),
-        "education":       state.get("education"),
-        "projects":        state.get("projects"),
-        "extracurricular": state.get("extracurricular"),
-        "error": state.get("error"),
+        "skills":           state.get("skills"),
+        "work_experience":  state.get("work_experience"),
+        "education":        state.get("education"),
+        "projects":         state.get("projects"),
+        "extracurricular":  state.get("extracurricular"),
+        "key_skills":       state.get("key_skills"),
+        "strong_domains":   state.get("strong_domains"),
+        "experience_level": state.get("experience_level"),
+        "ats_score":        state.get("ats_score"),
+        "error":            state.get("error"),
     }
-    
+
     message = {
         "event_type": "neon.store",
-        "payload": payload
+        "payload":    payload,
     }
-    
-    client.publish("resume:processed", json.dumps(message))
-    return {"stored_in_neon": True}
+
+    try:
+        client.publish("resume:processed", json.dumps(message))
+        print(f"Published neon.store event for user_id={payload['user_id']}, file_id={payload['file_id']}")
+        return {"stored_in_neon": True}
+    except Exception as e:
+        print("store_neon_node publish error:", str(e))
+        return {"error": str(e)}
