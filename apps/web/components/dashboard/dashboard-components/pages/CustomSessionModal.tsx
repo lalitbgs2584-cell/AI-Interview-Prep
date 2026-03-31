@@ -90,22 +90,18 @@ function buildDescription(
       max_questions:      questionCount,
       difficulty_override: difficulty,
       topics,
+      analytics_contract_version: 2,
+      prompt_contract_version: 2,
       evidence_anchoring: true,
-      adaptive_difficulty: true,
-      memory_back_reference: true,
-      analytics_mode: "expanded_v1",
-      score_pillars: ["content", "delivery", "confidence", "communication_flow"],
-      prompt_contract: "3-prompt-evidence-anchored",
+      structured_submit_answer: true,
+      strict_feedback_mode: true,
     })}__END_CONFIG__`;
 
   // 2. Human-readable context (used verbatim in prompts)
-  const parts: string[] = [configBlock, "SESSION_CONTEXT_PACK:"];
+  const parts: string[] = [configBlock];
   if (topics.length > 0) parts.push(`Focus topics: ${topics.join(", ")}.`);
   if (notes.trim())      parts.push(`Candidate notes: ${notes.trim()}`);
   if (jdText.trim())     parts.push(`Job Description:\n${jdText.trim()}`);
-  parts.push(
-    "Evaluation intent: enforce evidence-anchored questioning, adaptive difficulty, and actionable coaching priorities.",
-  );
 
   return parts.join("\n\n");
 }

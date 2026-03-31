@@ -35,12 +35,16 @@ interface QuestionScore {
   score:            number;
   difficulty:       "intro" | "easy" | "medium" | "hard";
   question:         string;
+  user_answer?:     string;
   verdict:          string;
   feedback:         string;
   missing_concepts: string[];
   strengths:        string[];
   weaknesses:       string[];
   timestamp:        number;
+  dimensions?:      Record<string, number>;
+  analytics?: Record<string, any>;
+  score_pillars?: Partial<ScorePillars>;
 }
 
 interface HistoryEntry {
@@ -58,6 +62,37 @@ interface GapAnalysis {
   dim_averages:    Record<string, number>;
 }
 
+interface ScorePillars {
+  content_score: number;
+  delivery_score: number;
+  confidence_score: number;
+  communication_flow_score: number;
+}
+
+interface SummaryAnalytics {
+  filler_summary: {
+    total_count?: number;
+    average_density?: number;
+    max_bursts?: number;
+    strictness?: string;
+  };
+  flow_summary: {
+    avg_wpm?: number;
+    avg_pause_ratio?: number;
+    long_pauses?: number;
+    avg_latency_ms?: number;
+    consistency?: number;
+  };
+  confidence_summary: {
+    avg_score?: number;
+    hedges?: number;
+    self_corrections?: number;
+    avg_vocal_stability?: number;
+    avg_decisiveness?: number;
+  };
+  concept_coverage_trend: Array<Record<string, any>>;
+}
+
 interface ResultsData {
   role:             string;
   interview_type:   string;
@@ -73,6 +108,17 @@ interface ResultsData {
   weaknesses:       string[];
   tips:             string[];
   skill_scores:     Record<string, number>;
+  score_pillars:    ScorePillars;
+  analytics:        SummaryAnalytics;
+  recovery_score:   number;
+  pressure_handling_score: number;
+  conciseness_score: number;
+  coaching_priorities: string[];
+  final_improvement_plan?: {
+    top_strengths: string[];
+    top_weaknesses: string[];
+    practice_next: string[];
+  };
   question_scores:  QuestionScore[];
   history:          HistoryEntry[];
   gap_analysis?:    GapAnalysis;
@@ -370,6 +416,27 @@ export default function FeedbackPage() {
         json.question_scores = Array.isArray(json.question_scores) ? json.question_scores : [];
         json.history         = Array.isArray(json.history)         ? json.history         : [];
         json.skill_scores    = json.skill_scores ?? {};
+        json.score_pillars   = json.score_pillars ?? {
+          content_score: json.overall_score ?? 0,
+          delivery_score: json.overall_score ?? 0,
+          confidence_score: json.overall_score ?? 0,
+          communication_flow_score: json.overall_score ?? 0,
+        };
+        json.analytics = json.analytics ?? {
+          filler_summary: {},
+          flow_summary: {},
+          confidence_summary: {},
+          concept_coverage_trend: [],
+        };
+        json.recovery_score = Number(json.recovery_score ?? 0);
+        json.pressure_handling_score = Number(json.pressure_handling_score ?? 0);
+        json.conciseness_score = Number(json.conciseness_score ?? 0);
+        json.coaching_priorities = Array.isArray(json.coaching_priorities) ? json.coaching_priorities : [];
+        json.final_improvement_plan = json.final_improvement_plan ?? {
+          top_strengths: json.strengths.slice(0, 3),
+          top_weaknesses: json.weaknesses.slice(0, 3),
+          practice_next: json.coaching_priorities.slice(0, 3),
+        };
         json.gap_analysis    = json.gap_analysis ?? {
           repeated_gaps: [], all_gaps: [], gap_frequency: {},
           weak_dimensions: [], dim_averages: {},
@@ -378,6 +445,8 @@ export default function FeedbackPage() {
           ...q,
           verdict:          q.verdict  || q.feedback || "No feedback available",
           feedback:         q.feedback || q.verdict  || "No feedback available",
+          user_answer:      q.user_answer || "",
+          dimensions:       q.dimensions ?? {},
           missing_concepts: Array.isArray(q.missing_concepts) ? q.missing_concepts : [],
           strengths:        Array.isArray(q.strengths)        ? q.strengths        : [],
           weaknesses:       Array.isArray(q.weaknesses)       ? q.weaknesses       : [],
@@ -423,6 +492,12 @@ export default function FeedbackPage() {
 
   /* ── DERIVED DATA ────────────────────────────────────────── */
   const skillScores = Object.entries(data.skill_scores).map(([skill, score]) => ({ skill, score }));
+  const pillarScores = [
+    { skill: "Content", score: data.score_pillars.content_score, color: C.accent },
+    { skill: "Delivery", score: data.score_pillars.delivery_score, color: C.sky },
+    { skill: "Confidence", score: data.score_pillars.confidence_score, color: C.amber },
+    { skill: "Flow", score: data.score_pillars.communication_flow_score, color: C.green },
+  ];
   const radarData   = skillScores.map((s) => ({ subject: s.skill, score: s.score }));
   const indexBase   = data.question_scores.length > 0 && data.question_scores[0]?.index === 0 ? 1 : 0;
 
@@ -461,6 +536,47 @@ export default function FeedbackPage() {
   const wrongItems: WentPoint[] = data.what_went_wrong.length > 0
     ? data.what_went_wrong
     : data.weaknesses.map((w) => ({ point: w, tag: "Gap" }));
+  const fillerSummary = data.analytics.filler_summary ?? {};
+  const flowSummary = data.analytics.flow_summary ?? {};
+  const confidenceSummary = data.analytics.confidence_summary ?? {};
+  const coverageTrend = Array.isArray(data.analytics.concept_coverage_trend)
+    ? data.analytics.concept_coverage_trend.map((point, i) => ({
+        q: `Q${point.question_order ?? i + 1}`,
+        coverage: Number(point.coverage_score ?? 0),
+        difficulty: String(point.difficulty ?? "unknown"),
+      }))
+    : [];
+  const avgDimension = (keys: string[], fallback = 0) => {
+    const vals = data.question_scores
+      .map((q) =>
+        keys
+          .map((key) => Number(q.dimensions?.[key] ?? NaN))
+          .find((value) => Number.isFinite(value)),
+      )
+      .filter((value): value is number => Number.isFinite(value));
+    return vals.length
+      ? Math.round((vals.reduce((sum, value) => sum + value, 0) / vals.length) * 10)
+      : fallback;
+  };
+  const richBreakdown = [
+    { label: "Content", score: Number(data.score_pillars.content_score ?? data.overall_score), note: "Covers the actual core of the answer" },
+    { label: "Clarity", score: avgDimension(["clarity"], Number(data.skill_scores.Clarity ?? data.skill_scores.Communication ?? 0)), note: "How clearly your ideas landed" },
+    { label: "Confidence", score: Number(data.score_pillars.confidence_score ?? confidenceSummary.avg_score ?? 0), note: "Directness, decisiveness, and control" },
+    { label: "Relevance", score: coverageTrend.length ? Math.round(coverageTrend.reduce((sum, point) => sum + point.coverage, 0) / coverageTrend.length) : Number(data.score_pillars.content_score ?? 0), note: "Stayed aligned with what the question asked" },
+    { label: "Structure", score: avgDimension(["star_structure"], Number(data.score_pillars.delivery_score ?? 0)), note: "How well the answer followed a clean shape" },
+    { label: "Communication", score: avgDimension(["communication"], Number(data.skill_scores.Communication ?? 0)), note: "Professional tone and delivery" },
+  ];
+  const improvementPlan = data.final_improvement_plan ?? {
+    top_strengths: rightItems.slice(0, 3).map((item) => item.point),
+    top_weaknesses: wrongItems.slice(0, 3).map((item) => item.point),
+    practice_next: (data.coaching_priorities.length ? data.coaching_priorities : data.tips).slice(0, 3),
+  };
+  const insightCards = [
+    { label: "Recovery", value: data.recovery_score, color: C.accent2 },
+    { label: "Pressure", value: data.pressure_handling_score, color: C.rose },
+    { label: "Conciseness", value: data.conciseness_score, color: C.sky },
+    { label: "Confidence", value: Number(confidenceSummary.avg_score ?? data.score_pillars.confidence_score ?? 0), color: C.green },
+  ];
 
   const TABS = [
     { id: "overview"  as const, label: "Overview"  },
@@ -572,6 +688,62 @@ export default function FeedbackPage() {
         {tab === "overview" && (
           <div className="tab-col fade-up-2">
 
+            <div className="panel">
+              <div className="panel-shine panel-shine-accent" />
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">Rich Feedback Breakdown</div>
+                  <div className="panel-sub">Strict scoring across the core interview dimensions</div>
+                </div>
+              </div>
+              <div className="skill-list">
+                {richBreakdown.map((item, i) => (
+                  <div key={item.label} className="skill-row" style={{ animationDelay: `${i * 0.05}s` }}>
+                    <div className="skill-row-top">
+                      <span className="skill-name">{item.label}</span>
+                      <div className="skill-row-right">
+                        <SkillTag label={scoreLabel(item.score)} score={item.score} />
+                        <span className="skill-score-val" style={{ color: scoreColor(item.score) }}>{item.score}</span>
+                      </div>
+                    </div>
+                    <AnimBar score={item.score} delay={i * 60} />
+                    <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>{item.note}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="tab-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "1rem" }}>
+              {[
+                { title: "Top 3 strengths", items: improvementPlan.top_strengths, color: C.green },
+                { title: "Top 3 weaknesses", items: improvementPlan.top_weaknesses, color: C.rose },
+                { title: "What to practice next", items: improvementPlan.practice_next, color: C.sky },
+              ].map((group) => (
+                <div key={group.title} className="panel">
+                  <div className="panel-header">
+                    <div>
+                      <div className="panel-title" style={{ color: group.color }}>{group.title}</div>
+                      <div className="panel-sub">Focused next-step coaching</div>
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+                    {(group.items.length ? group.items : ["No data available yet"]).map((item, i) => (
+                      <div key={`${group.title}-${i}`} style={{
+                        border: "1px solid var(--border)",
+                        borderRadius: 12,
+                        padding: "0.75rem 0.85rem",
+                        background: "rgba(255,255,255,0.03)",
+                        fontSize: "0.8rem",
+                        lineHeight: 1.6,
+                      }}>
+                        {item}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
             {/* Score History */}
             <div className="panel">
               <div className="panel-shine" />
@@ -619,6 +791,61 @@ export default function FeedbackPage() {
                   First session — history will appear here.
                 </div>
               )}
+            </div>
+
+            <div className="tab-grid-2">
+              <div className="panel">
+                <div className="panel-shine panel-shine-accent" />
+                <div className="panel-header">
+                  <div>
+                    <div className="panel-title">Strict Speech Signals</div>
+                    <div className="panel-sub">Filler words, confidence, and flow are scored harshly</div>
+                  </div>
+                </div>
+                <div className="skill-list">
+                  {[
+                    { skill: "Filler Count", score: Math.max(0, 100 - Number(fillerSummary.total_count ?? 0) * 8), meta: `${fillerSummary.total_count ?? 0} used` },
+                    { skill: "Filler Density", score: Math.max(0, 100 - Number(fillerSummary.average_density ?? 0) * 8), meta: `${fillerSummary.average_density ?? 0}/100 words` },
+                    { skill: "Flow Consistency", score: Number(flowSummary.consistency ?? 0), meta: `${flowSummary.avg_wpm ?? 0} WPM` },
+                    { skill: "Confidence Signals", score: Number(confidenceSummary.avg_score ?? 0), meta: `${confidenceSummary.hedges ?? 0} hedges` },
+                  ].map((item, i) => (
+                    <div key={item.skill} className="skill-row" style={{ animationDelay: `${i * 0.06}s` }}>
+                      <div className="skill-row-top">
+                        <span className="skill-name">{item.skill}</span>
+                        <div className="skill-row-right">
+                          <span className="skill-score-val" style={{ color: scoreColor(item.score) }}>{item.score}</span>
+                        </div>
+                      </div>
+                      <AnimBar score={item.score} delay={i * 50} />
+                      <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>{item.meta}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-shine" />
+                <div className="panel-header">
+                  <div>
+                    <div className="panel-title">Coverage Trend</div>
+                    <div className="panel-sub">How well you covered expected concepts question by question</div>
+                  </div>
+                </div>
+                {coverageTrend.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={190}>
+                    <LineChart data={coverageTrend} margin={{ top: 8, right: 12, bottom: 8, left: -20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                      <XAxis dataKey="q" tick={{ fontSize: 11, fill: C.muted }} axisLine={false} tickLine={false} />
+                      <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: C.muted }} axisLine={false} tickLine={false} />
+                      <Tooltip content={<ChartTip />} />
+                      <ReferenceLine y={70} stroke="rgba(255,92,53,0.22)" strokeDasharray="4 4" />
+                      <Line type="monotone" dataKey="coverage" name="Coverage" stroke={C.accent2} strokeWidth={2.5} dot={{ r: 4, fill: C.accent2 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div style={{ textAlign: "center", color: C.muted, padding: "3rem 0" }}>No coverage data</div>
+                )}
+              </div>
             </div>
 
             <div className="tab-grid-2">
@@ -737,6 +964,53 @@ export default function FeedbackPage() {
                         </div>
                       </div>
                       <AnimBar score={s.score} delay={i * 80} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="tab-grid-2">
+              <div className="panel">
+                <div className="panel-shine panel-shine-accent" />
+                <div className="panel-header">
+                  <div>
+                    <div className="panel-title">Score Pillars</div>
+                    <div className="panel-sub">Strict per-interview grading dimensions</div>
+                  </div>
+                </div>
+                <div className="skill-list">
+                  {pillarScores.map((item, i) => (
+                    <div key={item.skill} className="skill-row" style={{ animationDelay: `${i * 0.07}s` }}>
+                      <div className="skill-row-top">
+                        <span className="skill-name">{item.skill}</span>
+                        <span className="skill-score-val" style={{ color: item.color }}>{item.score}</span>
+                      </div>
+                      <AnimBar score={item.score} delay={i * 70} color={item.color} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-shine" />
+                <div className="panel-header">
+                  <div>
+                    <div className="panel-title">Interview Insights</div>
+                    <div className="panel-sub">Recovery, pressure, and tightness of communication</div>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+                  {insightCards.map((card) => (
+                    <div key={card.label} style={{
+                      border: "1px solid rgba(255,255,255,0.08)",
+                      borderRadius: 14,
+                      padding: "14px 16px",
+                      background: "rgba(255,255,255,0.03)",
+                    }}>
+                      <div style={{ color: C.muted, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em" }}>{card.label}</div>
+                      <div style={{ color: card.color, fontSize: 28, fontWeight: 800, lineHeight: 1.1, marginTop: 8 }}>{card.value}</div>
+                      <div style={{ marginTop: 10 }}><AnimBar score={card.value} color={card.color} /></div>
                     </div>
                   ))}
                 </div>
@@ -1013,6 +1287,35 @@ export default function FeedbackPage() {
                             <span className="feedback-icon" style={{
                               color: C.sky, fontFamily: "var(--ff-mono)",
                             }}>{i + 1}.</span>
+                          </div>
+                        </div>
+                        <p className="feedback-body">{tip}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {data.coaching_priorities.length > 0 && (
+              <div className="panel">
+                <div className="panel-shine panel-shine-accent" />
+                <div className="panel-header">
+                  <div>
+                    <div className="panel-title">Coaching Priorities</div>
+                    <div className="panel-sub">The three issues hurting your performance the most</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {data.coaching_priorities.map((tip, i) => (
+                    <div key={i} className="feedback-card" style={{ border: "1px solid rgba(255,92,53,0.14)" }}>
+                      <div className="feedback-card-bg" style={{ background: "rgba(255,92,53,0.03)" }} />
+                      <div className="feedback-card-bar" style={{ background: C.accent }} />
+                      <div className="feedback-card-content">
+                        <div className="feedback-card-header">
+                          <div className="feedback-card-title-row">
+                            <span className="feedback-icon" style={{ color: C.accent }}>{i + 1}.</span>
+                            <FeedbackTag label="Priority" variant="gap" />
                           </div>
                         </div>
                         <p className="feedback-body">{tip}</p>

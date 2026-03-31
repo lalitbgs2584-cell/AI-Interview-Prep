@@ -21,6 +21,21 @@ class EvalDimensions(TypedDict, total=False):
     self_awareness:  int   # 0-10 (behavioral)
 
 
+class AnswerAnalytics(TypedDict, total=False):
+    """Structured per-answer analytics from transcript and timing proxies."""
+    word_count: int
+    speech_duration_ms: int
+    latency_ms: int
+    interruptions: int
+    filler: Dict[str, Any]
+    flow: Dict[str, Any]
+    confidence_signals: Dict[str, Any]
+    star: Dict[str, Any]
+    conciseness_score: int
+    concept_coverage: int
+    score_pillars: Dict[str, int]
+
+
 class InterviewState(TypedDict, total=False):
     """
     LangGraph state for the interview flow.
@@ -59,18 +74,14 @@ class InterviewState(TypedDict, total=False):
     current_question: str            # The question being asked
     question_history: List[Dict[str, Any]]  # All prior Q&A entries (structured)
     difficulty:       str            # "intro" | "easy" | "medium" | "hard"
-    target_competency: str           # Competency intentionally tested by question
-    difficulty_rationale: str        # Why this question fits the current difficulty
-    anti_repetition_key: str         # Stable dedupe key for repeated-theme prevention
-    question_evidence_anchor: str    # Quote-like anchor from resume/context
 
     # ── Expected answer (generated alongside question, used for evaluation) ──
     expected_answer: ExpectedAnswer  # Key concepts, reasoning, structure, common mistakes
 
     # ─── User response ────────────────────────────────────────────────────
-    user_answer: str                 # Candidate's actual response
-    response_analytics: Dict[str, Any]  # Frontend transcript+audio analytics envelope
-    timeout:     bool                # True if wait_for_answer timed out
+    user_answer:      str             # Candidate's actual response
+    answer_analytics: AnswerAnalytics # Transcript/timing analytics for this answer
+    timeout:          bool            # True if wait_for_answer timed out
 
     # ─── Evaluation results (set by evaluate_answer, used by store_step) ───
     score:             int            # 0-10, deterministically capped by difficulty
@@ -82,12 +93,9 @@ class InterviewState(TypedDict, total=False):
     strengths:         List[str]      # Specific things done well
     weaknesses:        List[str]      # Specific gaps — names the missing concept
     verdict:           str            # 1-line brutally honest summary
-    why_score_not_higher: str         # Explicit reason this answer did not score higher
-    evidence_snippets: List[str]      # Quote-like snippets from transcript answer
     followup:          bool           # True if a follow-up question would help
     followup_question: str            # The follow-up question text (if followup=True)
-    response_analytics_metrics: Dict[str, Any]  # Derived metrics: filler/flow/confidence/star
-    score_pillars: Dict[str, int]     # content/delivery/confidence/communication_flow (0-100)
+    score_pillars:     Dict[str, int] # content, delivery, confidence, flow pillars
 
     # ─── Gap analysis (accumulated, used by finalize) ─────────────────────
     gap_map: Dict[str, int]          # concept -> miss count (for repeated gaps)
@@ -106,6 +114,3 @@ class InterviewState(TypedDict, total=False):
 
     # ─── Final summary (set by finalize, sent to frontend) ──────────────────
     summary: Dict[str, Any]          # Full report: scores, recommendations, feedback
-    content_quality: str             # Summary focused on answer quality
-    delivery_quality: str            # Summary focused on communication delivery
-    interview_integrity: str         # Summary focused on policy/integrity behavior

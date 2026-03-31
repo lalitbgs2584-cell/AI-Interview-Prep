@@ -26,7 +26,7 @@ interface InterviewCompleteEvent {
         strengths: string[];
         weaknesses: string[];
         overall_score: number;   // 0-100
-        recommendation: "Hire" | "Strong Hire" | "No Hire" | "Needs More Evaluation" | "Insufficient data";
+        recommendation: "Hire" | "Strong Hire" | "No Hire" | "Needs More Evaluation";
     };
 }
 

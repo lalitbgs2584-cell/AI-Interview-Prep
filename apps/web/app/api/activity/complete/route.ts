@@ -14,11 +14,11 @@ export async function POST(req: NextRequest) {
 
   const {
     interviewId,
-    endReason,
-    interruptionCount,
-    tabSwitches,
-    fsExits,
-    sessionDurationSec,
+    endReason = "user_ended",
+    interruptionCount = 0,
+    tabSwitches = 0,
+    fsExits = 0,
+    sessionDurationSec = 0,
   } = await req.json();
 
   if (!interviewId)
@@ -43,6 +43,8 @@ export async function POST(req: NextRequest) {
   else if (lastIso === todayIso) streak = streak;
   else streak = 1;
 
+  const finalStatus = endReason === "completed" ? "COMPLETED" : "CANCELLED";
+
   // ── Run both updates in parallel ──────────────────────────────────────
   await Promise.all([
     prisma.user.update({
@@ -58,13 +60,13 @@ export async function POST(req: NextRequest) {
     prisma.interview.update({
       where: { id: interviewId },
       data: {
-        status: "COMPLETED",
+        status: finalStatus,
         completedAt: new Date(),
         endReason,
-        interruptionCount,
-        tabSwitches,
-        fsExits,
-        sessionDurationSec,
+        interruptionCount: Number(interruptionCount) || 0,
+        tabSwitches: Number(tabSwitches) || 0,
+        fsExits: Number(fsExits) || 0,
+        sessionDurationSec: Number(sessionDurationSec) || 0,
         // integrityScore: compute here if you want, or leave null for a separate job
       },
     }),

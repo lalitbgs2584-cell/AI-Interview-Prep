@@ -32,6 +32,20 @@ interface GapAnalysis {
   dim_averages: Record<string, number>;
 }
 
+interface ScorePillars {
+  content_score: number;
+  delivery_score: number;
+  confidence_score: number;
+  communication_flow_score: number;
+}
+
+interface SummaryAnalytics {
+  filler_summary: Record<string, any>;
+  flow_summary: Record<string, any>;
+  confidence_summary: Record<string, any>;
+  concept_coverage_trend: Array<Record<string, any>>;
+}
+
 interface UnifiedInterviewResult {
   // ── Metadata ──────────────────────────────────────────────────────────────
   role: string;
@@ -54,6 +68,12 @@ interface UnifiedInterviewResult {
 
   // ── Gap analysis (deterministic, from finalize node) ──────────────────────
   gap_analysis: GapAnalysis;
+  score_pillars: ScorePillars;
+  analytics: SummaryAnalytics;
+  recovery_score: number;
+  pressure_handling_score: number;
+  conciseness_score: number;
+  coaching_priorities: string[];
 
   // ── Scores — snake_case (FeedbackPage) ────────────────────────────────────
   overall_score: number;
@@ -73,20 +93,26 @@ interface UnifiedInterviewResult {
     score: number;         // 0-100
     difficulty: string;
     question: string;
+    user_answer?: string;
     verdict: string;       // primary — from LLM narration
     feedback: string;      // alias of verdict for backward-compat
     missing_concepts: string[];
     strengths: string[];
     weaknesses: string[];
     timestamp: number;
+    dimensions?: Record<string, number>;
+    analytics?: Record<string, any>;
+    score_pillars?: Partial<ScorePillars>;
   }[];
 
   // ── Questions — HistoryPage drawer format ─────────────────────────────────
   questions: {
     order: number | null;
     content: string;
+    answer?: string | null;
     difficulty: string | null;
     score: number | null;
+    dimensions?: Record<string, number> | null;
     evaluation: {
       overallScore: number | null;
       clarity: number | null;
@@ -105,6 +131,12 @@ interface UnifiedInterviewResult {
     role: string;
     date_iso: string;
   }[];
+
+  final_improvement_plan?: {
+    top_strengths: string[];
+    top_weaknesses: string[];
+    practice_next: string[];
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -116,11 +148,27 @@ interface UnifiedInterviewResult {
 function normalizeRedisSummary(
   raw: any,
   history: UnifiedInterviewResult["history"],
+  replaySteps: Array<{
+    index: number;
+    user_answer?: string;
+    dimensions?: Record<string, number>;
+    timestamp?: number;
+  }> = [],
 ): UnifiedInterviewResult {
   const skillScores: Record<string, number> = raw.skill_scores ?? {};
 
   // question_scores from finalize node: score is already 0-100
   const questionScoresRaw: any[] = raw.question_scores ?? [];
+  const replayByIndex = new Map(
+    replaySteps.map((step) => [
+      Number(step.index ?? 0),
+      {
+        user_answer: String(step.user_answer ?? ""),
+        dimensions: step.dimensions && typeof step.dimensions === "object" ? step.dimensions : {},
+        timestamp: Number(step.timestamp ?? 0),
+      },
+    ]),
+  );
 
   const overall = raw.overall_score ?? 0;
 
@@ -173,6 +221,26 @@ function normalizeRedisSummary(
       ? rawGap.dim_averages
       : {},
   };
+  const scorePillars: ScorePillars = {
+    content_score: Number(raw.score_pillars?.content_score ?? overall),
+    delivery_score: Number(raw.score_pillars?.delivery_score ?? communicationScore),
+    confidence_score: Number(raw.score_pillars?.confidence_score ?? confidenceScore),
+    communication_flow_score: Number(raw.score_pillars?.communication_flow_score ?? communicationScore),
+  };
+  const analytics: SummaryAnalytics = {
+    filler_summary: raw.analytics?.filler_summary && typeof raw.analytics.filler_summary === "object"
+      ? raw.analytics.filler_summary
+      : {},
+    flow_summary: raw.analytics?.flow_summary && typeof raw.analytics.flow_summary === "object"
+      ? raw.analytics.flow_summary
+      : {},
+    confidence_summary: raw.analytics?.confidence_summary && typeof raw.analytics.confidence_summary === "object"
+      ? raw.analytics.confidence_summary
+      : {},
+    concept_coverage_trend: Array.isArray(raw.analytics?.concept_coverage_trend)
+      ? raw.analytics.concept_coverage_trend
+      : [],
+  };
 
   // Build FeedbackPage question_scores — finalize already outputs 0-100 scores
   const question_scores: UnifiedInterviewResult["question_scores"] = questionScoresRaw.map(
@@ -183,12 +251,16 @@ function normalizeRedisSummary(
         score:            Number(q.score ?? 0),           // 0-100 from finalize
         difficulty:       String(q.difficulty ?? "medium").toLowerCase(),
         question:         String(q.question ?? ""),
+        user_answer:      replayByIndex.get(Number(q.index ?? 0))?.user_answer ?? String(q.user_answer ?? ""),
         verdict,
         feedback:         verdict,                         // alias
+        dimensions:       replayByIndex.get(Number(q.index ?? 0))?.dimensions ?? (q.dimensions && typeof q.dimensions === "object" ? q.dimensions : {}),
+        analytics:        q.analytics && typeof q.analytics === "object" ? q.analytics : {},
+        score_pillars:    q.score_pillars && typeof q.score_pillars === "object" ? q.score_pillars : {},
         missing_concepts: Array.isArray(q.missing_concepts) ? q.missing_concepts.map(String) : [],
         strengths:        Array.isArray(q.strengths) ? q.strengths.map(String) : [],
         weaknesses:       Array.isArray(q.weaknesses) ? q.weaknesses.map(String) : [],
-        timestamp:        Number(q.timestamp ?? 0),
+        timestamp:        Number(replayByIndex.get(Number(q.index ?? 0))?.timestamp ?? q.timestamp ?? 0),
       };
     },
   );
@@ -197,13 +269,15 @@ function normalizeRedisSummary(
   const questions: UnifiedInterviewResult["questions"] = questionScoresRaw.map((q: any) => ({
     order:      Number(q.index ?? 0),
     content:    String(q.question ?? ""),
+    answer:     replayByIndex.get(Number(q.index ?? 0))?.user_answer ?? String(q.user_answer ?? ""),
     difficulty: q.difficulty ? String(q.difficulty).toUpperCase() : null,
     score:      q.score !== undefined && q.score !== null ? Number(q.score) : null,
+    dimensions: replayByIndex.get(Number(q.index ?? 0))?.dimensions ?? (q.dimensions && typeof q.dimensions === "object" ? q.dimensions : {}),
     evaluation: {
       overallScore: q.score !== undefined && q.score !== null ? Number(q.score) : null,
-      clarity:      null,
-      technical:    null,
-      confidence:   null,
+      clarity:      Number(replayByIndex.get(Number(q.index ?? 0))?.dimensions?.clarity ?? q.dimensions?.clarity ?? 0) || null,
+      technical:    Number(replayByIndex.get(Number(q.index ?? 0))?.dimensions?.correctness ?? q.dimensions?.correctness ?? q.dimensions?.depth ?? 0) || null,
+      confidence:   Number(q.score_pillars?.confidence_score ?? 0) || null,
       feedback:     String(q.verdict ?? q.feedback ?? ""),
       strengths:    Array.isArray(q.strengths) && q.strengths.length
         ? q.strengths.join(" | ")
@@ -236,6 +310,12 @@ function normalizeRedisSummary(
 
     // Gap analysis
     gap_analysis: gapAnalysis,
+    score_pillars: scorePillars,
+    analytics,
+    recovery_score: Number(raw.recovery_score ?? 0),
+    pressure_handling_score: Number(raw.pressure_handling_score ?? 0),
+    conciseness_score: Number(raw.conciseness_score ?? 0),
+    coaching_priorities: Array.isArray(raw.coaching_priorities) ? raw.coaching_priorities.map(String) : [],
 
     // Scores — snake_case
     overall_score: overall,
@@ -254,6 +334,11 @@ function normalizeRedisSummary(
 
     // History
     history,
+    final_improvement_plan: {
+      top_strengths: strengths.slice(0, 3),
+      top_weaknesses: weaknesses.slice(0, 3),
+      practice_next: Array.isArray(raw.coaching_priorities) ? raw.coaching_priorities.slice(0, 3).map(String) : [],
+    },
   };
 }
 
@@ -312,7 +397,7 @@ export const resumeController = {
         orderBy: { createdAt: "desc" },
         select: {
           id: true, title: true, type: true, status: true,
-          createdAt: true, completedAt: true,
+          createdAt: true, completedAt: true, endReason: true,
           questions: { select: { score: true } },
         },
       });
@@ -338,11 +423,19 @@ export const resumeController = {
         const duration = iv.completedAt
           ? Math.floor((iv.completedAt.getTime() - iv.createdAt.getTime()) / 1000)
           : null;
+        const normalizedStatus =
+          iv.status === "CREATED" || iv.status === "IN_PROGRESS"
+            ? iv.endReason && iv.endReason !== "completed"
+              ? "terminated"
+              : iv.completedAt
+                ? "completed"
+                : "in_progress"
+            : STATUS_MAP[iv.status] ?? "in_progress";
         return {
           id: iv.id,
           title: iv.title,
           type: TYPE_LABEL[iv.type] ?? iv.type,
-          status: STATUS_MAP[iv.status] ?? "in_progress",
+          status: normalizedStatus,
           score,
           date: iv.createdAt.toISOString(),
           duration,
@@ -385,14 +478,59 @@ export const resumeController = {
       if (redisSummary) {
         console.log(`[interviewFeedback] Redis hit for ${interviewId}`);
         const raw = JSON.parse(redisSummary);
-        return res.status(200).json(normalizeRedisSummary(raw, history));
+        const replaySteps = await redisClient
+          .lrange(`interview:${interviewId}:history`, 0, -1)
+          .then((rows) =>
+            rows.map((row) => {
+              try {
+                return JSON.parse(row);
+              } catch {
+                return null;
+              }
+            }).filter(Boolean),
+          );
+        return res.status(200).json(normalizeRedisSummary(raw, history, replaySteps as any));
       }
 
       // ── 2️⃣ InterviewSummary TABLE (persisted after storeNeon) ─────────────
       // This is the richest DB source — mirrors the finalize node output exactly.
       const summaryRecord = await prisma.interviewSummary.findUnique({
         where: { interviewId },
-        include: { interview: { select: { userId: true, title: true, type: true, createdAt: true, completedAt: true } } },
+        include: {
+          interview: {
+            select: {
+              userId: true,
+              title: true,
+              type: true,
+              createdAt: true,
+              completedAt: true,
+              questions: {
+                orderBy: { order: "asc" },
+                select: {
+                  order: true,
+                  question: { select: { content: true, difficulty: true } },
+                  response: {
+                    select: {
+                      userAnswer: true,
+                      submittedAt: true,
+                      evaluation: {
+                        select: {
+                          dimensions: true,
+                          confidence: true,
+                          strengths: true,
+                          weaknesses: true,
+                          verdict: true,
+                          feedback: true,
+                          missingConcepts: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
       });
 
       if (summaryRecord && summaryRecord.interview.userId === userId) {
@@ -419,6 +557,19 @@ export const resumeController = {
         const questionScoresRaw: any[] = Array.isArray(summary.questionScores)
           ? summary.questionScores
           : [];
+        const replayByIndex = new Map(
+          (iv.questions ?? []).map((iq) => [
+            Number(iq.order ?? 0),
+            {
+              answer: iq.response?.userAnswer ?? "",
+              timestamp: iq.response?.submittedAt
+                ? Math.floor(iq.response.submittedAt.getTime() / 1000)
+                : 0,
+              dimensions: (iq.response?.evaluation?.dimensions ?? {}) as Record<string, number>,
+              confidence: iq.response?.evaluation?.confidence ?? null,
+            },
+          ]),
+        );
 
         const gapRaw: any = summary.gapAnalysis ?? {};
         const gapAnalysis: GapAnalysis = {
@@ -464,33 +615,47 @@ export const resumeController = {
               score:            Number(q.score ?? 0),
               difficulty:       String(q.difficulty ?? "medium").toLowerCase(),
               question:         String(q.question ?? ""),
+              user_answer:      String(replayByIndex.get(Number(q.index ?? 0))?.answer ?? q.user_answer ?? ""),
               verdict,
               feedback:         verdict,
+              dimensions:       replayByIndex.get(Number(q.index ?? 0))?.dimensions ?? (q.dimensions && typeof q.dimensions === "object" ? q.dimensions : {}),
+              analytics:        q.analytics && typeof q.analytics === "object" ? q.analytics : {},
+              score_pillars:    q.score_pillars && typeof q.score_pillars === "object" ? q.score_pillars : {},
               missing_concepts: Array.isArray(q.missing_concepts) ? q.missing_concepts.map(String) : [],
               strengths:        Array.isArray(q.strengths) ? q.strengths.map(String) : [],
               weaknesses:       Array.isArray(q.weaknesses) ? q.weaknesses.map(String) : [],
-              timestamp:        Number(q.timestamp ?? 0),
+              timestamp:        Number(replayByIndex.get(Number(q.index ?? 0))?.timestamp ?? q.timestamp ?? 0),
             };
           },
         );
 
-        const questions: UnifiedInterviewResult["questions"] = questionScoresRaw.map((q: any) => ({
-          order:      Number(q.index ?? 0),
-          content:    String(q.question ?? ""),
-          difficulty: q.difficulty ? String(q.difficulty).toUpperCase() : null,
-          score:      q.score !== undefined ? Number(q.score) : null,
-          evaluation: {
-            overallScore: q.score !== undefined ? Number(q.score) : null,
-            clarity:      null,
-            technical:    null,
-            confidence:   null,
-            feedback:     String(q.verdict ?? q.feedback ?? ""),
-            strengths:    Array.isArray(q.strengths) && q.strengths.length
-              ? q.strengths.join(" | ") : null,
-            improvements: Array.isArray(q.weaknesses) && q.weaknesses.length
-              ? q.weaknesses.join(" | ") : null,
-          },
-        }));
+        const questions: UnifiedInterviewResult["questions"] = questionScoresRaw.map((q: any) => {
+          const replayDimensions = (replayByIndex.get(Number(q.index ?? 0))?.dimensions ?? {}) as Record<string, number>;
+          const questionDimensions =
+            q.dimensions && typeof q.dimensions === "object" ? (q.dimensions as Record<string, number>) : {};
+
+          return {
+            order:      Number(q.index ?? 0),
+            content:    String(q.question ?? ""),
+            answer:     String(replayByIndex.get(Number(q.index ?? 0))?.answer ?? q.user_answer ?? ""),
+            difficulty: q.difficulty ? String(q.difficulty).toUpperCase() : null,
+            score:      q.score !== undefined ? Number(q.score) : null,
+            dimensions: replayDimensions ?? questionDimensions,
+            evaluation: {
+              overallScore: q.score !== undefined ? Number(q.score) : null,
+              clarity:      Number(replayDimensions.clarity ?? questionDimensions.clarity ?? 0) || null,
+              technical:    Number(replayDimensions.correctness ?? questionDimensions.correctness ?? questionDimensions.depth ?? 0) || null,
+              confidence:   replayByIndex.get(Number(q.index ?? 0))?.confidence != null
+                ? Math.round(Number(replayByIndex.get(Number(q.index ?? 0))?.confidence) * 100)
+                : Number(q.score_pillars?.confidence_score ?? 0) || null,
+              feedback:     String(q.verdict ?? q.feedback ?? ""),
+              strengths:    Array.isArray(q.strengths) && q.strengths.length
+                ? q.strengths.join(" | ") : null,
+              improvements: Array.isArray(q.weaknesses) && q.weaknesses.length
+                ? q.weaknesses.join(" | ") : null,
+            },
+          };
+        });
 
         const payload: UnifiedInterviewResult = {
           role:             iv.title,
@@ -507,6 +672,26 @@ export const resumeController = {
           what_went_right:  whatWentRight,
           what_went_wrong:  whatWentWrong,
           gap_analysis:     gapAnalysis,
+          score_pillars: {
+            content_score: Number((gapRaw as any)._score_pillars?.content_score ?? overall),
+            delivery_score: Number((gapRaw as any)._score_pillars?.delivery_score ?? communicationScore),
+            confidence_score: Number((gapRaw as any)._score_pillars?.confidence_score ?? confidenceScore),
+            communication_flow_score: Number((gapRaw as any)._score_pillars?.communication_flow_score ?? communicationScore),
+          },
+          analytics: {
+            filler_summary: (gapRaw as any)._analytics?.filler_summary ?? {},
+            flow_summary: (gapRaw as any)._analytics?.flow_summary ?? {},
+            confidence_summary: (gapRaw as any)._analytics?.confidence_summary ?? {},
+            concept_coverage_trend: Array.isArray((gapRaw as any)._analytics?.concept_coverage_trend)
+              ? (gapRaw as any)._analytics.concept_coverage_trend
+              : [],
+          },
+          recovery_score: Number((gapRaw as any)._recovery_score ?? 0),
+          pressure_handling_score: Number((gapRaw as any)._pressure_handling_score ?? 0),
+          conciseness_score: Number((gapRaw as any)._conciseness_score ?? 0),
+          coaching_priorities: Array.isArray((gapRaw as any)._coaching_priorities)
+            ? (gapRaw as any)._coaching_priorities
+            : [],
           overall_score:    overall,
           skill_scores:     skillScores,
           overallScore:     overall,
@@ -517,6 +702,13 @@ export const resumeController = {
           question_scores,
           questions,
           history,
+          final_improvement_plan: {
+            top_strengths: strengths.slice(0, 3),
+            top_weaknesses: weaknesses.slice(0, 3),
+            practice_next: Array.isArray((gapRaw as any)._coaching_priorities)
+              ? (gapRaw as any)._coaching_priorities.slice(0, 3)
+              : [],
+          },
         };
 
         return res.status(200).json(payload);
@@ -601,8 +793,10 @@ export const resumeController = {
             score:            iq.score ?? 0,                 // 0-100 from DB
             difficulty:       (iq.question.difficulty ?? "medium").toLowerCase(),
             question:         iq.question.content,
+            user_answer:      iq.response?.userAnswer ?? "",
             verdict,
             feedback:         verdict,
+            dimensions:       (ev as any)?.dimensions ?? {},
             missing_concepts: (ev as any)?.missingConcepts ?? [],
             strengths:        qStrengths,
             weaknesses:       qWeaknesses,
@@ -616,8 +810,10 @@ export const resumeController = {
         return {
           order:      iq.order,
           content:    iq.question.content,
+          answer:     iq.response?.userAnswer ?? null,
           difficulty: iq.question.difficulty ?? null,
           score:      iq.score ?? null,
+          dimensions: (ev as any)?.dimensions ?? null,
           evaluation: ev
             ? {
                 overallScore: ev.overallScore ?? null,
@@ -656,6 +852,22 @@ export const resumeController = {
           weak_dimensions: [],
           dim_averages:    {},
         },
+        score_pillars: {
+          content_score: overallScore,
+          delivery_score: communicationScore,
+          confidence_score: confidenceScore,
+          communication_flow_score: communicationScore,
+        },
+        analytics: {
+          filler_summary: {},
+          flow_summary: {},
+          confidence_summary: {},
+          concept_coverage_trend: [],
+        },
+        recovery_score: 0,
+        pressure_handling_score: 0,
+        conciseness_score: 0,
+        coaching_priorities: [],
         overall_score:    overallScore,
         skill_scores,
         overallScore,
@@ -666,6 +878,11 @@ export const resumeController = {
         question_scores,
         questions,
         history,
+        final_improvement_plan: {
+          top_strengths: strengths.slice(0, 3),
+          top_weaknesses: weaknesses.slice(0, 3),
+          practice_next: [],
+        },
       };
 
       return res.status(200).json(payload);
@@ -736,6 +953,15 @@ export const resumeController = {
         return;
       }
       const summary = JSON.parse(rawSummary);
+      const persistedGapAnalysis = {
+        ...(summary.gap_analysis ?? {}),
+        _score_pillars: summary.score_pillars ?? {},
+        _analytics: summary.analytics ?? {},
+        _recovery_score: summary.recovery_score ?? 0,
+        _pressure_handling_score: summary.pressure_handling_score ?? 0,
+        _conciseness_score: summary.conciseness_score ?? 0,
+        _coaching_priorities: summary.coaching_priorities ?? [],
+      };
 
       const rawHistory = await redisClient.lrange(`interview:${interviewId}:history`, 0, -1);
 
@@ -869,7 +1095,7 @@ export const resumeController = {
             tips:            summary.tips              ?? [],
             skillScores:     summary.skill_scores      ?? {},
             questionScores:  summary.question_scores   ?? [],
-            gapAnalysis:     summary.gap_analysis      ?? {},
+            gapAnalysis:     persistedGapAnalysis,
           },
           create: {
             interviewId,
@@ -884,14 +1110,24 @@ export const resumeController = {
             tips:            summary.tips              ?? [],
             skillScores:     summary.skill_scores      ?? {},
             questionScores:  summary.question_scores   ?? [],
-            gapAnalysis:     summary.gap_analysis      ?? {},
+            gapAnalysis:     persistedGapAnalysis,
           },
         });
 
         // ── Mark interview completed ──────────────────────────────────────
+        const finalInterviewStatus =
+          summary.end_reason && summary.end_reason !== "completed"
+            ? "CANCELLED"
+            : interview.status === "CANCELLED"
+              ? "CANCELLED"
+              : "COMPLETED";
+
         await tx.interview.update({
           where: { id: interviewId },
-          data:  { status: "COMPLETED", completedAt: new Date() },
+          data:  {
+            status: finalInterviewStatus,
+            completedAt: interview.completedAt ?? new Date(),
+          },
         });
       });
       console.log("UPDATED STATUS:", interview.status);
