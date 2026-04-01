@@ -362,6 +362,13 @@ model InterviewSummary {
   // { repeated_gaps[], all_gaps[], gap_frequency{}, weak_dimensions[], dim_averages{} }
   gapAnalysis Json @default("{}")
 
+  contentQuality     String?
+  deliveryQuality    String?
+  interviewIntegrity String?
+  endReason          String?
+  isEarlyExit        Boolean @default(false)
+  interruptionCount  Int     @default(0)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -409,7 +416,7 @@ model InterviewQuestion {
   score Int?
 
   // NEW — snapshot of the expected answer used during this interview session
-  expectedAnswer Json? // { key_concepts[], reasoning_steps[], ideal_structure, common_mistakes[] }
+  referenceAnswer String?
 
   createdAt DateTime @default(now())
 
@@ -454,9 +461,6 @@ model Evaluation {
   overallScore100 Int? // 0–100 convenience field (overallScore * 10)
   confidence      Float? // LLM confidence 0.0–1.0
 
-  // ── Dimensional breakdown (NEW) ───────────────────────────────────────────
-  // Technical:   { correctness, depth, clarity, communication }     all 0–10
-  // Behavioral:  { star_structure, self_awareness, clarity, communication } all 0–10
   dimensions Json?
 
   // ── Comparative analysis (NEW) ────────────────────────────────────────────
@@ -477,6 +481,10 @@ model Evaluation {
   technical    Int?
   improvements String?
   feedback     String? // mirrors verdict for backward compat
+
+  whyScoreNotHigher    String?
+  evidenceSnippets     String[]  @default([]) 
+  responseAnalyticsMetrics Json? 
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
