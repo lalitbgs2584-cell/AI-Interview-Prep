@@ -443,6 +443,41 @@ def safe_json_parse(text: str) -> dict:
     raise ValueError(f"Could not parse JSON from LLM output: {text[:200]}")
 
 
+llm_classifier = ChatOpenAI(
+    model="gpt-4.1", temperature=0.0, api_key=settings.OPENAI_API_KEY
+)
+
+# ── Slightly warmer for the reference answer — we want natural language ──
+llm_ref = ChatOpenAI(model="gpt-4.1", temperature=0.3, api_key=settings.OPENAI_API_KEY)
+INTERVIEWER_PERSONA = (
+    "You are a professional, in-character technical/behavioral interviewer. "
+    "You are polite but firm. You never break character. "
+    "You respond in English only, regardless of what language the candidate uses."
+)
+
+
+def _safe_json(text: str) -> dict:
+    cleaned = re.sub(r"```(?:json)?", "", text).replace("```", "").strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+    raise ValueError(f"Cannot parse JSON: {text[:200]}")
+
+
+def _publish_event(channel: str, payload: dict) -> None:
+    client.publish(channel, json.dumps(payload))
+
+
+def _is_terminated(state: InterviewState) -> bool:
+    return bool(state.get("timeout", False))
+
+
 def get_candidate_name(resume_chunks: List[str]) -> str:
     if not resume_chunks:
         return "the candidate"
@@ -1242,6 +1277,17 @@ Return ONLY this JSON:
                 parsed = safe_json_parse(response_text)
                 question = str(parsed.get("question", "")).strip()
                 expected_answer = parsed.get("expected_answer", {})
+<<<<<<< HEAD
+=======
+                target_competency = str(parsed.get("target_competency", "")).strip()
+                difficulty_rationale = str(
+                    parsed.get("difficulty_rationale", "")
+                ).strip()
+                anti_repetition_key = str(parsed.get("anti_repetition_key", "")).strip()
+                question_evidence_anchor = str(
+                    parsed.get("evidence_anchor", "")
+                ).strip()
+>>>>>>> upstream/main
 
     except Exception as e:
         print(f"[generate_question] LLM/parse error: {e}")
@@ -1286,6 +1332,34 @@ Return ONLY this JSON:
                 "No personal contribution",
             ],
         }
+<<<<<<< HEAD
+=======
+        target_competency = (
+            "behavioral_communication" if human_round else "technical_problem_solving"
+        )
+        difficulty_rationale = f"Fallback question chosen for {difficulty.upper()} after LLM parse failure."
+        anti_repetition_key = f"fallback-{difficulty}-{index}"
+        question_evidence_anchor = (
+            custom_topics[0]
+            if custom_topics
+            else (skills[0] if skills else "candidate profile context")
+        )
+
+    if not target_competency:
+        target_competency = (
+            "behavioral_communication" if human_round else "technical_problem_solving"
+        )
+    if not difficulty_rationale:
+        difficulty_rationale = f"This question is calibrated for {difficulty.upper()} based on prior turns and profile depth."
+    if not anti_repetition_key:
+        anti_repetition_key = f"{interview_type.lower()}-{difficulty}-q{index+1}"
+    if not question_evidence_anchor:
+        question_evidence_anchor = (
+            custom_topics[0]
+            if custom_topics
+            else (skills[0] if skills else "candidate profile context")
+        )
+>>>>>>> upstream/main
 
     entry = {
         "question": question,
@@ -1412,7 +1486,15 @@ def wait_for_answer(state: InterviewState) -> dict:
                 payload = _extract_answer_payload(raw)
                 answer = payload["text"]
                 if answer == "__END__":
+<<<<<<< HEAD
                     return {"user_answer": "", "timeout": True}
+=======
+                    return {
+                        "user_answer": "",
+                        "response_analytics": {},
+                        "timeout": True,
+                    }
+>>>>>>> upstream/main
                 print(f"[wait_for_answer] Answer received: {answer[:80]}…")
                 return {
                     "user_answer": answer,
@@ -1770,6 +1852,293 @@ Return ONLY valid JSON — no markdown, no extra keys:
     return result
 
 
+def classify_answer_intent(state: InterviewState) -> dict:
+    """
+    NODE A — Classifies what the user actually said before scoring it.
+
+    Returns a dict that includes:
+        intent            : 'answer' | 'meta_request' | 'skip' | 'question'
+        intent_reply      : interviewer response for non-ANSWER intents (empty for ANSWER)
+        user_answer       : unchanged (pass-through)
+        timeout           : unchanged (pass-through)
+        skip_requested    : True only when intent == 'skip'
+
+    The LangGraph router reads `intent` to decide the next node.
+    """
+    print("[classify_answer_intent] started")
+
+    if _is_terminated(state):
+        print("[classify_answer_intent] ⛔ Terminated — skipping")
+        return {
+            "intent": "answer",
+            "intent_reply": "",
+            "skip_requested": False,
+        }
+
+    answer = (state.get("user_answer") or "").strip()
+    question = state.get("current_question", "")
+    role = state.get("role", "Software Engineer")
+    interview_type = state.get("interview_type", "technical")
+    interview_id = state.get("interview_id", "")
+    index = state.get("current_index", 1) - 1
+
+    # Empty answer — treat as a no-op ANSWER so downstream handles it with _empty
+    if not answer:
+        return {
+            "intent": "answer",
+            "intent_reply": "",
+            "skip_requested": False,
+        }
+
+    classification_prompt = f"""{INTERVIEWER_PERSONA}
+ 
+You are currently running a {interview_type} interview for a {role} position.
+ 
+The question that was just asked to the candidate:
+\"\"\"
+{question}
+\"\"\"
+ 
+The candidate responded with:
+\"\"\"
+{answer}
+\"\"\"
+ 
+Your task: classify the candidate's response into EXACTLY ONE of these four intents.
+ 
+INTENT DEFINITIONS:
+  ANSWER        — The candidate is genuinely attempting to answer the question.
+                  Even a partial, wrong, or very short answer still counts.
+                  Even if they mention they don't know but try to reason → ANSWER.
+  META_REQUEST  — The candidate is NOT answering. Instead they are making a
+                  request that changes how the interview runs:
+                    · asking to switch language ("speak Hindi", "respond in French")
+                    · asking to change the format ("can you type instead of speak")
+                    · asking about scoring rules ("how will this be graded")
+                    · any request that is about the interview process itself
+  SKIP          — The candidate explicitly says they want to skip or pass:
+                    · "skip", "pass", "next question", "I want to skip this",
+                      "can we move on", "skip karein"
+  QUESTION      — The candidate is asking a clarifying question about the
+                  interview question itself (not about the process):
+                    · "what do you mean by X?"
+                    · "are you asking about Y or Z?"
+                    · "can you give me an example?"
+ 
+CLASSIFICATION RULES:
+  1. If there is ANY genuine attempt to address the question topic, prefer ANSWER.
+  2. Only use META_REQUEST if the response contains zero answer content AND is
+     clearly a request to change something about how the interview works.
+  3. Language-switch requests ("reply in Hindi") are always META_REQUEST.
+  4. "I don't know" alone is ANSWER (a valid but weak answer).
+  5. Combine meta + attempt → classify as ANSWER (the attempt wins).
+ 
+After classifying, write a SHORT in-character interviewer reply for non-ANSWER
+intents. The reply must:
+  - Be 1–3 sentences maximum.
+  - Stay strictly in English regardless of what language the candidate used.
+  - For META_REQUEST: politely but FIRMLY decline. Do NOT apologize excessively.
+    State clearly this is not possible and redirect to the question.
+  - For SKIP: acknowledge, say you will move to the next question.
+  - For QUESTION: answer the clarification concisely, then re-invite the answer.
+  - For ANSWER: leave reply as empty string "".
+ 
+Return ONLY valid JSON:
+{{
+  "intent": "<ANSWER|META_REQUEST|SKIP|QUESTION>",
+  "reply": "<in-character reply for non-ANSWER — empty string for ANSWER>"
+}}"""
+
+    intent = "answer"
+    intent_reply = ""
+
+    try:
+        raw = llm_classifier.invoke(
+            [HumanMessage(content=classification_prompt)]
+        ).content.strip()
+        parsed = _safe_json(raw)
+
+        raw_intent = str(parsed.get("intent", "ANSWER")).strip().upper()
+        if raw_intent not in {"ANSWER", "META_REQUEST", "SKIP", "QUESTION"}:
+            raw_intent = "ANSWER"
+
+        intent = raw_intent.lower()
+        intent_reply = str(parsed.get("reply", "")).strip()
+
+        print(
+            f"[classify_answer_intent] intent={intent} | "
+            f"reply={intent_reply[:80] if intent_reply else '(none)'}…"
+        )
+
+    except Exception as e:
+        print(f"[classify_answer_intent] LLM/parse error: {e} — defaulting to ANSWER")
+        intent = "answer"
+        intent_reply = ""
+
+    # Publish the intent reply immediately so frontend TTS reads it out
+    if intent != "answer" and intent_reply and interview_id:
+        _publish_event(
+            f"interview:{interview_id}:events",
+            {
+                "type": "intent_reply",
+                "intent": intent,
+                "reply": intent_reply,
+                "index": index,
+            },
+        )
+        print(f"[classify_answer_intent] Published intent_reply for intent={intent}")
+
+    return {
+        "intent": intent,
+        "intent_reply": intent_reply,
+        "skip_requested": intent == "skip",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NODE B: GENERATE REFERENCE ANSWER
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def generate_reference_answer(state: InterviewState) -> dict:
+    """
+    NODE B — Generates a clean, human-readable model answer for the current
+    question. Runs AFTER generate_question, BEFORE publish_question.
+
+    The reference answer is stored in state['reference_answer'] and is
+    included in:
+      · store_step() — persisted per question in Redis
+      · finalize() — included in question_scores for frontend feedback display
+
+    It is NOT shown during the interview — only in the post-interview report.
+
+    Returns:
+        reference_answer: str — a 150-300 word model answer in plain English
+    """
+    print("[generate_reference_answer] started")
+
+    if _is_terminated(state):
+        print("[generate_reference_answer] ⛔ Terminated — skipping")
+        return {"reference_answer": ""}
+
+    question = state.get("current_question", "")
+    expected_answer = state.get("expected_answer") or {}
+    role = state.get("role", "Software Engineer")
+    interview_type = state.get("interview_type", "technical")
+    difficulty = state.get("difficulty", "medium")
+
+    # Support turns have no scoreable question — skip
+    if state.get("is_support_turn", False):
+        print("[generate_reference_answer] Skipping — support turn")
+        return {"reference_answer": ""}
+
+    if not question:
+        return {"reference_answer": ""}
+
+    key_concepts = expected_answer.get("key_concepts", [])
+    reasoning_steps = expected_answer.get("reasoning_steps", [])
+    ideal_structure = expected_answer.get("ideal_structure", "")
+    common_mistakes = expected_answer.get("common_mistakes", [])
+
+    is_behavioral = interview_type in {"behavioral", "hr"}
+
+    if is_behavioral:
+        format_note = (
+            "Structure the answer using the STAR method "
+            "(Situation, Task, Action, Result). "
+            "Make it concrete — invent a realistic professional scenario. "
+            "Include a measurable outcome in the Result section."
+        )
+    else:
+        format_note = (
+            "Structure the answer clearly: start with a direct answer, "
+            "explain the reasoning, cover edge cases or trade-offs if relevant. "
+            "Use plain English — no code unless essential."
+        )
+
+    ref_prompt = f"""You are an expert {role} being asked a {difficulty.upper()} {interview_type} interview question.
+ 
+QUESTION:
+{question}
+ 
+WHAT A COMPLETE ANSWER MUST COVER:
+Key concepts: {json.dumps(key_concepts)}
+Reasoning steps: {json.dumps(reasoning_steps)}
+Ideal structure: {ideal_structure}
+Common mistakes to avoid: {json.dumps(common_mistakes)}
+ 
+YOUR TASK:
+Write a model answer that a strong candidate would give. This answer will be shown
+to the candidate AFTER the interview as a reference — not during.
+ 
+FORMAT RULES:
+- {format_note}
+- 150–300 words. No more.
+- Write in first person ("I would...", "In my experience...").
+- Do NOT use bullet points or numbered lists — write in flowing prose.
+- Do NOT start with "Certainly", "Sure", "Great question", or any preamble.
+- Start directly with the answer content.
+- Cover all key concepts naturally within the prose.
+ 
+Write only the model answer. Nothing else."""
+
+    reference_answer = ""
+
+    try:
+        reference_answer = llm_ref.invoke(
+            [HumanMessage(content=ref_prompt)]
+        ).content.strip()
+        print(
+            f"[generate_reference_answer] Generated {len(reference_answer)} chars "
+            f"for Q: {question[:60]}…"
+        )
+    except Exception as e:
+        print(f"[generate_reference_answer] LLM error: {e}")
+        # Fallback: build a minimal reference from expected_answer fields
+        if key_concepts:
+            reference_answer = (
+                f"A strong answer to this question would cover: "
+                f"{', '.join(key_concepts[:4])}. "
+            )
+        if reasoning_steps:
+            reference_answer += (
+                f"The ideal reasoning path is: {' → '.join(reasoning_steps[:3])}. "
+            )
+        if ideal_structure:
+            reference_answer += ideal_structure
+        reference_answer = reference_answer.strip() or (
+            "No reference answer could be generated for this question."
+        )
+
+    return {"reference_answer": reference_answer}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANGGRAPH ROUTER  (add this to your graph builder)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def route_after_intent(state: InterviewState) -> str:
+    """
+    Conditional edge function for LangGraph.
+    Called after classify_answer_intent.
+
+    Returns the name of the next node:
+        "evaluate_answer"    — ANSWER intent → score it
+        "wait_for_answer"    — META_REQUEST or QUESTION → loopback after reply
+        "generate_question"  — SKIP → advance to next question
+    """
+    intent = (state.get("intent") or "answer").lower()
+
+    if intent == "answer":
+        return "evaluate_answer"
+    elif intent == "skip":
+        return "generate_question"
+    else:
+        # META_REQUEST or QUESTION — reply was already published, loop back
+        return "wait_for_answer"
+
+
 # ─────────────────────────────────────────────
 # NODE 6: STORE STEP  (full structured data)
 # ─────────────────────────────────────────────
@@ -1815,6 +2184,15 @@ def store_step(state: InterviewState) -> dict:
         "index": history_index,
         "question": state.get("current_question", ""),
         "expected_answer": state.get("expected_answer", {}),
+<<<<<<< HEAD
+=======
+        "target_competency": state.get("target_competency", ""),
+        "difficulty_rationale": state.get("difficulty_rationale", ""),
+        "reference_answer": state.get("reference_answer", ""), 
+        "expected_answer": state.get("expected_answer", {}),
+        "anti_repetition_key": state.get("anti_repetition_key", ""),
+        "evidence_anchor": state.get("question_evidence_anchor", ""),
+>>>>>>> upstream/main
         "user_answer": state.get("user_answer", ""),
         "score": state.get("score", 0),
         "confidence": state.get("confidence", 0.0),
@@ -2424,6 +2802,34 @@ Rules:
 
             what_went_right = clean_points(narrated.get("what_went_right", []))
             what_went_wrong = clean_points(narrated.get("what_went_wrong", []))
+<<<<<<< HEAD
+=======
+            raw_summary = narrated.get("summary", {})
+            if isinstance(raw_summary, dict):
+                content_quality = str(raw_summary.get("content_quality", "")).strip()
+                delivery_quality = str(raw_summary.get("delivery_quality", "")).strip()
+                interview_integrity = str(
+                    raw_summary.get("interview_integrity", "")
+                ).strip()
+            else:
+                content_quality = str(raw_summary).strip()
+                delivery_quality = ""
+                interview_integrity = ""
+
+            if not content_quality:
+                content_quality = f"You finished with {overall_100}/100 and showed mixed depth across tested competencies."
+            if not delivery_quality:
+                delivery_quality = "Your delivery quality reflects clarity and structure signals observed in your responses."
+            if not interview_integrity:
+                interview_integrity = (
+                    "Integrity signals were stable throughout this session."
+                    if not is_early_exit and interruption_count <= 1
+                    else f"Integrity impact noted: end_reason={end_reason}, interruptions={interruption_count}."
+                )
+            summary_text = " ".join(
+                s for s in [content_quality, delivery_quality, interview_integrity] if s
+            ).strip()
+>>>>>>> upstream/main
 
             summary_payload = {
                 "role": role,
@@ -2436,12 +2842,35 @@ Rules:
                 "recommendation": recommendation,
                 "skill_scores": skill_scores,
                 "question_scores": question_scores,
+<<<<<<< HEAD
                 "score_pillars": facts["score_pillars"],
                 "analytics": facts["analytics"],
                 "recovery_score": facts["recovery_score"],
                 "pressure_handling_score": facts["pressure_handling_score"],
                 "conciseness_score": facts["conciseness_score"],
                 "coaching_priorities": facts["coaching_priorities"],
+=======
+                "score_pillars": analytics_facts.get("score_pillars", {}),
+                "analytics": {
+                    "filler_summary": analytics_facts.get("filler_summary", {}),
+                    "flow_summary": analytics_facts.get("flow_summary", {}),
+                    "confidence_summary": analytics_facts.get("confidence_summary", {}),
+                },
+                "insights": {
+                    "star_completeness": analytics_facts.get("star_completeness", []),
+                    "concept_coverage_trend": analytics_facts.get(
+                        "concept_coverage_trend", []
+                    ),
+                    "recovery_score": analytics_facts.get("recovery_score", 0),
+                    "pressure_handling_score": analytics_facts.get(
+                        "pressure_handling_score", 0
+                    ),
+                    "conciseness_score": analytics_facts.get("conciseness_score", 0),
+                    "coaching_priorities": analytics_facts.get(
+                        "coaching_priorities", []
+                    ),
+                },
+>>>>>>> upstream/main
                 # ── Narrated content from LLM step ───────────────────────────
                 "summary": str(narrated.get("summary", "")),
                 "what_went_right": what_went_right,
@@ -2477,12 +2906,35 @@ Rules:
                 "recommendation": recommendation,
                 "skill_scores": skill_scores,
                 "question_scores": question_scores,
+<<<<<<< HEAD
                 "score_pillars": facts["score_pillars"],
                 "analytics": facts["analytics"],
                 "recovery_score": facts["recovery_score"],
                 "pressure_handling_score": facts["pressure_handling_score"],
                 "conciseness_score": facts["conciseness_score"],
                 "coaching_priorities": facts["coaching_priorities"],
+=======
+                "score_pillars": analytics_facts.get("score_pillars", {}),
+                "analytics": {
+                    "filler_summary": analytics_facts.get("filler_summary", {}),
+                    "flow_summary": analytics_facts.get("flow_summary", {}),
+                    "confidence_summary": analytics_facts.get("confidence_summary", {}),
+                },
+                "insights": {
+                    "star_completeness": analytics_facts.get("star_completeness", []),
+                    "concept_coverage_trend": analytics_facts.get(
+                        "concept_coverage_trend", []
+                    ),
+                    "recovery_score": analytics_facts.get("recovery_score", 0),
+                    "pressure_handling_score": analytics_facts.get(
+                        "pressure_handling_score", 0
+                    ),
+                    "conciseness_score": analytics_facts.get("conciseness_score", 0),
+                    "coaching_priorities": analytics_facts.get(
+                        "coaching_priorities", []
+                    ),
+                },
+>>>>>>> upstream/main
                 "summary": (
                     f"Interview completed with a weighted score of {facts['weighted_avg']}/10. "
                     f"Repeated gaps: {', '.join(facts['repeated_gaps']) or 'none identified'}."

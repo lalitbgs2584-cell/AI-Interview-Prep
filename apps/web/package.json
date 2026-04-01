@@ -18,6 +18,7 @@
     "@mediapipe/tasks-vision": "^0.10.33",
     "@repo/auth": "workspace:*",
     "@repo/db": "workspace:*",
+    "@vladmandic/face-api": "^1.7.15",
     "@workspace/ui": "workspace:*",
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
