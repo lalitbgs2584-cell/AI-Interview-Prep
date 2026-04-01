@@ -18,14 +18,47 @@ interface UnifiedResult {
   role: string;
   interview_type: string;
   date_iso: string;
+  summary?: string;
   recommendation: string;
   overall_score: number;
   skill_scores: Record<string, number>;
+  score_pillars?: Record<string, number>;
+  question_scores?: Array<{
+    index: number;
+    score: number;
+    difficulty: string;
+    question: string;
+    user_answer?: string;
+    feedback: string;
+    strengths: string[];
+    weaknesses: string[];
+    dimensions?: Record<string, number>;
+  }>;
+  analytics?: {
+    filler_summary?: Record<string, any>;
+    flow_summary?: Record<string, any>;
+    confidence_summary?: Record<string, any>;
+  };
+  final_improvement_plan?: {
+    top_strengths: string[];
+    top_weaknesses: string[];
+    practice_next: string[];
+  };
+  coaching_priorities?: string[];
+  recovery_score?: number;
+  pressure_handling_score?: number;
+  conciseness_score?: number;
   strengths: string[];
   weaknesses: string[];
 }
 
 interface Milestone {
+  label: string;
+  sub: string;
+  done: boolean;
+}
+
+interface ChecklistItem {
   label: string;
   sub: string;
   done: boolean;
@@ -137,6 +170,27 @@ function buildMilestones(
   ];
 }
 
+function buildFeatureChecklist(
+  items: HistoryItem[],
+  latestResult: UnifiedResult | null,
+): ChecklistItem[] {
+  const hasReplay = items.some(i => i.status !== "in_progress");
+  const hasBreakdown = Boolean(latestResult?.score_pillars && Object.keys(latestResult.score_pillars).length > 0);
+  const hasQuestionReplay = Boolean(latestResult?.question_scores?.length);
+  const hasImprovementPlan = Boolean(latestResult?.final_improvement_plan?.practice_next?.length);
+  const hasCoaching = Boolean(latestResult?.coaching_priorities?.length);
+  const hasStrictAnalytics = Boolean(latestResult?.analytics);
+
+  return [
+    { label: "Interview replay", sub: hasQuestionReplay ? "Question-by-question review is available" : "Complete one session to unlock replay details", done: hasReplay && hasQuestionReplay },
+    { label: "Rich feedback breakdown", sub: hasBreakdown ? "Content, delivery and confidence bars are live" : "Waiting for the latest scored result", done: hasBreakdown },
+    { label: "Final improvement plan", sub: hasImprovementPlan ? "Top strengths, weaknesses and next practice items are ready" : "Will appear after a completed interview", done: hasImprovementPlan },
+    { label: "Strict communication analytics", sub: hasStrictAnalytics ? "Filler, flow and confidence diagnostics are being tracked" : "No diagnostic payload found yet", done: hasStrictAnalytics },
+    { label: "Coaching priorities", sub: hasCoaching ? "Priority actions for the next round are surfaced" : "Needs at least one narrated result", done: hasCoaching },
+    { label: "Advanced recruiter analytics", sub: "Still pending — no recruiter/admin overview yet", done: false },
+  ];
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatCard({
@@ -174,6 +228,9 @@ function SkeletonCard() {
 export default function ProgressPage() {
   const [items,        setItems]        = useState<HistoryItem[]>([]);
   const [latestResult, setLatestResult] = useState<UnifiedResult | null>(null);
+  const [replayResult, setReplayResult] = useState<UnifiedResult | null>(null);
+  const [replayTitle, setReplayTitle] = useState<string | null>(null);
+  const [replayLoading, setReplayLoading] = useState(false);
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState<string | null>(null);
 
@@ -234,7 +291,42 @@ export default function ProgressPage() {
 
   const milestones  = buildMilestones(items, latestResult);
   const doneCount   = milestones.filter(m => m.done).length;
+  const featureChecklist = buildFeatureChecklist(items, latestResult);
+  const completedCount = items.filter(i => i.status === "completed").length;
+  const terminatedCount = items.filter(i => i.status === "terminated").length;
+  const inProgressCount = items.filter(i => i.status === "in_progress").length;
+  const sessionOutcomeBars = [
+    { label: "Completed", value: completedCount, color: "#2bba8a" },
+    { label: "Terminated", value: terminatedCount, color: "#e04040" },
+    { label: "In progress", value: inProgressCount, color: "#4f8ef7" },
+  ];
+  const maxOutcome = Math.max(...sessionOutcomeBars.map(item => item.value), 1);
+  const interviewTypeBars = ["Coding", "Behavioral", "System Design"].map((type) => ({
+    label: type,
+    value: items.filter(i => i.type === type).length,
+    color: type === "Coding" ? "#4878d4" : type === "System Design" ? "#e09b30" : "#7a50b8",
+  }));
+  const maxTypeValue = Math.max(...interviewTypeBars.map(item => item.value), 1);
   const skillScores = latestResult?.skill_scores ?? {};
+  const pillarScores = latestResult?.score_pillars ?? {};
+  const fillerSummary = latestResult?.analytics?.filler_summary ?? {};
+  const flowSummary = latestResult?.analytics?.flow_summary ?? {};
+  const confidenceSummary = latestResult?.analytics?.confidence_summary ?? {};
+  const loadReplay = async (item: HistoryItem) => {
+    try {
+      setReplayLoading(true);
+      setReplayTitle(item.title);
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/interview/${item.id}/results`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(`Replay fetch failed: ${res.status}`);
+      setReplayResult(await res.json());
+    } catch (e: any) {
+      setError(e.message ?? "Failed to load replay");
+    } finally {
+      setReplayLoading(false);
+    }
+  };
 
   // ── Error state ─────────────────────────────────────────────────────────────
   if (error) {
@@ -357,6 +449,52 @@ export default function ProgressPage() {
         )}
       </div>
 
+      {!loading && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "1rem" }}>
+          <div className="panel">
+            <div className="panel-header">
+              <div>
+                <div className="panel-title">Session outcomes</div>
+                <div className="panel-sub">How your interview attempts are resolving</div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+              {sessionOutcomeBars.map((item) => (
+                <div key={item.label}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", marginBottom: 6 }}>
+                    <span style={{ color: "var(--muted)" }}>{item.label}</span>
+                    <span style={{ color: item.color, fontWeight: 700 }}>{item.value}</span>
+                  </div>
+                  <div style={{ height: 8, background: "var(--bg2)", borderRadius: 999, overflow: "hidden", border: "1px solid var(--border)" }}>
+                    <div style={{ width: `${(item.value / maxOutcome) * 100}%`, height: "100%", background: item.color, borderRadius: 999 }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-header">
+              <div>
+                <div className="panel-title">Interview type mix</div>
+                <div className="panel-sub">Coverage across practice formats</div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "flex-end", gap: "0.75rem", height: 148 }}>
+              {interviewTypeBars.map((item) => (
+                <div key={item.label} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: "0.45rem" }}>
+                  <span style={{ fontSize: "0.68rem", color: item.color, fontWeight: 700 }}>{item.value}</span>
+                  <div style={{ width: "100%", height: `${Math.max(12, (item.value / maxTypeValue) * 92)}px`, borderRadius: "var(--r-sm) var(--r-sm) 0 0", background: item.color, opacity: 0.85 }} />
+                  <span style={{ fontSize: "0.68rem", color: "var(--muted)", textAlign: "center" }}>{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Skill breakdown — only shown when latest result has skill_scores ── */}
       {!loading && Object.keys(skillScores).length > 0 && (
         <div className="panel">
@@ -399,6 +537,104 @@ export default function ProgressPage() {
                 }}>
                   {score}
                 </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!loading && (
+        <div className="panel">
+          <div className="panel-header">
+            <div>
+              <div className="panel-title">Feature checklist</div>
+              <div className="panel-sub">What is already handled and what is still pending</div>
+            </div>
+          </div>
+
+          <div className="milestone-list">
+            {featureChecklist.map((item, index) => (
+              <div key={`${item.label}-${index}`} className="milestone-item">
+                <div className={`milestone-check ${item.done ? "done" : "todo"}`}>
+                  {item.done ? "✓" : "○"}
+                </div>
+                <div>
+                  <div className="milestone-label" style={{ color: item.done ? "var(--text)" : "var(--text-3)" }}>
+                    {item.label}
+                  </div>
+                  <div className="milestone-sub">{item.sub}</div>
+                </div>
+                <span className={item.done ? "tag tag-gold" : "tag tag-accent"} style={{ marginLeft: "auto" }}>
+                  {item.done ? "Done" : "Pending"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!loading && latestResult && (
+        <div className="panel">
+          <div className="panel-header">
+            <div>
+              <div className="panel-title">Strict communication diagnostics</div>
+              <div className="panel-sub">Latest interview only</div>
+            </div>
+            <span className="tag tag-accent">{latestResult.overall_score}/100</span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.8rem" }}>
+            {[
+              { label: "Content", value: Number(pillarScores.content_score ?? latestResult.overall_score), note: latestResult.role },
+              { label: "Delivery", value: Number(pillarScores.delivery_score ?? latestResult.overall_score), note: `${flowSummary.avg_wpm ?? "—"} WPM` },
+              { label: "Confidence", value: Number(pillarScores.confidence_score ?? 0), note: `${confidenceSummary.hedges ?? 0} hedges` },
+              { label: "Flow", value: Number(pillarScores.communication_flow_score ?? 0), note: `${flowSummary.avg_latency_ms ?? 0} ms latency` },
+              { label: "Recovery", value: Number(latestResult.recovery_score ?? 0), note: "How strongly you bounced back" },
+              { label: "Conciseness", value: Number(latestResult.conciseness_score ?? 0), note: `${fillerSummary.total_count ?? 0} filler words` },
+            ].map((card) => (
+              <div key={card.label} style={{
+                border: "1px solid var(--border)",
+                borderRadius: "var(--r-md)",
+                padding: "0.9rem",
+                background: "var(--bg2)",
+              }}>
+                <div style={{ fontSize: "0.68rem", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  {card.label}
+                </div>
+                <div style={{ fontSize: "1.7rem", fontWeight: 800, marginTop: "0.35rem", color: scoreColor(card.value) }}>
+                  {card.value}
+                </div>
+                <div style={{ marginTop: "0.55rem", height: 6, background: "var(--bg)", borderRadius: 999, overflow: "hidden" }}>
+                  <div style={{ width: `${Math.min(100, card.value)}%`, height: "100%", background: skillBarColor(card.value), borderRadius: 999 }} />
+                </div>
+                <div style={{ fontSize: "0.68rem", color: "var(--muted)", marginTop: "0.5rem" }}>{card.note}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!loading && latestResult?.coaching_priorities && latestResult.coaching_priorities.length > 0 && (
+        <div className="panel">
+          <div className="panel-header">
+            <div>
+              <div className="panel-title">Coaching priorities</div>
+              <div className="panel-sub">What to fix before the next practice session</div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
+            {latestResult.coaching_priorities.map((item, i) => (
+              <div key={i} style={{
+                border: "1px solid var(--border)",
+                borderRadius: "var(--r-md)",
+                padding: "0.8rem 0.9rem",
+                background: "var(--bg2)",
+              }}>
+                <div style={{ fontSize: "0.72rem", color: "#a07010", fontWeight: 700, marginBottom: 6 }}>
+                  Priority {i + 1}
+                </div>
+                <div style={{ fontSize: "0.82rem", lineHeight: 1.6 }}>{item}</div>
               </div>
             ))}
           </div>
@@ -453,6 +689,22 @@ export default function ProgressPage() {
                       {iv.type} · {fmtDate(iv.date)}
                     </div>
                   </div>
+                  {iv.status !== "in_progress" && (
+                    <button
+                      onClick={() => loadReplay(iv)}
+                      style={{
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        border: "1px solid var(--border)",
+                        background: "var(--bg2)",
+                        color: "var(--text)",
+                        fontSize: "0.68rem",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Replay
+                    </button>
+                  )}
                   {iv.score != null ? (
                     <span style={{
                       marginLeft: "auto", padding: "2px 9px", borderRadius: 99,
@@ -524,6 +776,150 @@ export default function ProgressPage() {
               ))}
         </div>
       </div>
+      {replayTitle && (
+        <div style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(4,8,18,0.72)",
+          backdropFilter: "blur(10px)",
+          zIndex: 1200,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "1.5rem",
+        }}>
+          <div style={{
+            width: "min(920px, 100%)",
+            maxHeight: "88vh",
+            overflowY: "auto",
+            background: "var(--bg)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--r-lg)",
+            padding: "1.1rem",
+            boxShadow: "0 24px 64px rgba(0,0,0,0.35)",
+          }}>
+            <div className="panel-header" style={{ marginBottom: "1rem" }}>
+              <div>
+                <div className="panel-title">Interview replay</div>
+                <div className="panel-sub">
+                  {replayTitle}{replayResult ? ` · ${replayResult.interview_type}` : ""}
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setReplayTitle(null);
+                  setReplayResult(null);
+                }}
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: 999,
+                  border: "1px solid var(--border)",
+                  background: "transparent",
+                  color: "var(--text)",
+                  cursor: "pointer",
+                }}
+              >
+                Close
+              </button>
+            </div>
+
+            {replayLoading && (
+              <div style={{ color: "var(--muted)", padding: "1rem 0" }}>Loading replay...</div>
+            )}
+
+            {!replayLoading && replayResult && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                <div style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--r-md)",
+                  padding: "0.9rem",
+                  background: "var(--bg2)",
+                }}>
+                  <div style={{ fontSize: "0.92rem", fontWeight: 600 }}>{replayResult.summary ?? "Session replay"}</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.75rem", marginTop: "0.85rem" }}>
+                    {[
+                      { label: "Overall", value: replayResult.overall_score },
+                      { label: "Verdict", value: replayResult.recommendation },
+                      { label: "Questions", value: replayResult.question_scores?.length ?? 0 },
+                    ].map((card) => (
+                      <div key={card.label} style={{ border: "1px solid var(--border)", borderRadius: "var(--r-sm)", padding: "0.7rem" }}>
+                        <div style={{ fontSize: "0.68rem", color: "var(--muted)", textTransform: "uppercase" }}>{card.label}</div>
+                        <div style={{ fontSize: "1.05rem", fontWeight: 700, marginTop: 4 }}>{card.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {replayResult.final_improvement_plan && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: "0.8rem" }}>
+                    {[
+                      { title: "Top strengths", items: replayResult.final_improvement_plan.top_strengths, color: "#2bba8a" },
+                      { title: "Top weaknesses", items: replayResult.final_improvement_plan.top_weaknesses, color: "#e04040" },
+                      { title: "Practice next", items: replayResult.final_improvement_plan.practice_next, color: "#4f8ef7" },
+                    ].map((group) => (
+                      <div key={group.title} style={{ border: "1px solid var(--border)", borderRadius: "var(--r-md)", padding: "0.85rem" }}>
+                        <div style={{ fontSize: "0.78rem", fontWeight: 700, color: group.color, marginBottom: "0.6rem" }}>{group.title}</div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                          {(group.items?.length ? group.items : ["No data available"]).map((item, idx) => (
+                            <div key={`${group.title}-${idx}`} style={{ fontSize: "0.78rem", lineHeight: 1.5 }}>{item}</div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}>
+                  {(replayResult.question_scores ?? []).map((question, idx) => (
+                    <div key={`${question.index}-${idx}`} style={{
+                      border: "1px solid var(--border)",
+                      borderRadius: "var(--r-md)",
+                      padding: "0.95rem",
+                      background: "var(--bg2)",
+                    }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: "0.8rem", marginBottom: "0.75rem" }}>
+                        <div>
+                          <div style={{ fontSize: "0.68rem", color: "var(--muted)", textTransform: "uppercase" }}>
+                            Q{(question.index ?? idx) + 1} · {question.difficulty}
+                          </div>
+                          <div style={{ fontSize: "0.9rem", fontWeight: 600, marginTop: 4 }}>{question.question}</div>
+                        </div>
+                        <div style={{ color: scoreColor(question.score), fontWeight: 700 }}>{question.score}</div>
+                      </div>
+
+                      <div style={{ display: "grid", gap: "0.75rem" }}>
+                        <div>
+                          <div style={{ fontSize: "0.68rem", color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 }}>Your answer</div>
+                          <div style={{ fontSize: "0.8rem", lineHeight: 1.6 }}>{question.user_answer || "No recorded answer."}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: "0.68rem", color: "var(--muted)", textTransform: "uppercase", marginBottom: 4 }}>AI feedback</div>
+                          <div style={{ fontSize: "0.8rem", lineHeight: 1.6 }}>{question.feedback}</div>
+                        </div>
+                        {question.dimensions && Object.keys(question.dimensions).length > 0 && (
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "0.55rem" }}>
+                            {Object.entries(question.dimensions).map(([label, value]) => (
+                              <div key={label}>
+                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.7rem", color: "var(--muted)", marginBottom: 4 }}>
+                                  <span style={{ textTransform: "capitalize" }}>{label.replace(/_/g, " ")}</span>
+                                  <span>{value}/10</span>
+                                </div>
+                                <div style={{ height: 6, background: "var(--bg)", borderRadius: 999, overflow: "hidden" }}>
+                                  <div style={{ width: `${Math.min(100, Number(value) * 10)}%`, height: "100%", background: skillBarColor(Number(value) * 10), borderRadius: 999 }} />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 }

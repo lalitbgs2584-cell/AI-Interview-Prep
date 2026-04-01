@@ -23,7 +23,7 @@ export default function WaitingRoom() {
   const [ready, setReady]             = useState(false);
   const [exiting, setExiting]         = useState(false);
   const questionReceived              = useRef(false);
-
+  console.log("Interview Id is : ",interviewId)
   // ── Auto-advance steps ──
   useEffect(() => {
     let stepIndex = 0;
