@@ -17,13 +17,13 @@ export async function GET() {
     const userId = session.user.id;
     const oneMonthAgo = new Date(new Date().getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    // ─ Get all user skills
+    // " Get all user skills
     const userSkills = await prisma.userSkill.findMany({
       where: { userId },
       include: { skill: true },
     });
 
-    // ─ Get all completed interviews in the last month
+    // " Get all completed interviews in the last month
     const recentInterviews = await prisma.interview.findMany({
       where: {
         userId,
@@ -50,7 +50,7 @@ export async function GET() {
       },
     });
 
-    // ─ Calculate skill scores based on interview performance
+    // " Calculate skill scores based on interview performance
     const skillScoreMap = new Map<string, number[]>();
 
     // Initialize skill scores with empty arrays
@@ -102,7 +102,7 @@ export async function GET() {
       });
     });
 
-    // ─ Calculate average scores for each skill
+    // " Calculate average scores for each skill
     const skillsWithScores = userSkills.map((us) => {
       const scores = skillScoreMap.get(us.skill.name) || [];
       const avgScore =
@@ -115,7 +115,7 @@ export async function GET() {
       };
     });
 
-    // ─ Sort by score (descending) for better UX
+    // " Sort by score (descending) for better UX
     skillsWithScores.sort((a, b) => b.score - a.score);
 
     return NextResponse.json({

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -24,7 +24,23 @@ export default function WaitingRoom() {
   const [exiting, setExiting]         = useState(false);
   const questionReceived              = useRef(false);
   console.log("Interview Id is : ",interviewId)
-  // ── Auto-advance steps ──
+
+  useEffect(() => {
+    if (interviewId) {
+      useInterviewStore.getState().setInterviewId(interviewId);
+    }
+    useInterviewStore.getState().setInterviewMeta(interviewTitle, interviewType);
+
+    if (typeof window !== "undefined" && interviewId) {
+      const key = `interview_meta:${interviewId}`;
+      const payload = {
+        title: interviewTitle ?? null,
+        type: interviewType ?? null,
+      };
+      sessionStorage.setItem(key, JSON.stringify(payload));
+    }
+  }, [interviewId, interviewTitle, interviewType]);
+  // "" Auto-advance steps ""
   useEffect(() => {
     let stepIndex = 0;
 
@@ -44,7 +60,7 @@ export default function WaitingRoom() {
     return () => clearTimeout(initial);
   }, []);
 
-  // ── Socket ──
+  // "" Socket ""
   useEffect(() => {
     const socket = getSocket();
 
@@ -64,7 +80,7 @@ export default function WaitingRoom() {
     };
 
     const joinInterview = () => {
-      console.log("✅ connected", socket.id);
+      console.log("... connected", socket.id);
       socket.emit("join_interview", { interviewId });
     };
 
@@ -74,7 +90,7 @@ export default function WaitingRoom() {
     }
 
     socket.on("connect", joinInterview);
-    socket.on("connect_error", (err) => console.log("❌ connect error", err.message));
+    socket.on("connect_error", (err) => console.log(" connect error", err.message));
     socket.on("interview:question", handleQuestion);
 
     return () => {
@@ -126,7 +142,7 @@ export default function WaitingRoom() {
           </svg>
           <div className="wr-ring-inner">
             {ready ? (
-              <span className="wr-ring-check">✓</span>
+              <span className="wr-ring-check">"</span>
             ) : (
               <span className="wr-ring-percent">{progress}%</span>
             )}
@@ -150,7 +166,7 @@ export default function WaitingRoom() {
                 ].filter(Boolean).join(" ")}
               >
                 <span className="wr-step-icon">
-                  {done ? "✓" : active ? "◉" : "○"}
+                  {done ? "OK" : active ? ">" : "-"}
                 </span>
                 <span className="wr-step-label">{step.label}</span>
 
@@ -170,7 +186,7 @@ export default function WaitingRoom() {
         {/* Status line */}
         <p className="wr-status-line">
           {ready
-            ? "Your interview is ready. Good luck! 🎯"
+            ? "Your interview is ready. Good luck! "
             : currentStep > 0
             ? `${STEPS[currentStep - 1]?.label}...`
             : "Starting up..."}

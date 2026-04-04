@@ -11,8 +11,8 @@ INTERVIEW_TYPE_GUIDELINES = {
 }
 DIFFICULTY_MAPPING = {
     "BEHAVIOURAL": {
-        "easy": "Questions 1–3: Use EASY tier (Que-1 to Que-17) — self-awareness, daily habits, teamwork basics.",
-        "moderate": "Questions 4–7: Use MODERATE tier (Que-18 to Que-34) — past experiences, conflict, initiative, adaptation.",
-        "hard": "Questions 8–10: Use DIFFICULT tier (Que-35 to Que-50) — high-stakes decisions, ambiguity, leadership under pressure.",
+        "easy": "Questions 1"3: Use EASY tier (Que-1 to Que-17) " self-awareness, daily habits, teamwork basics.",
+        "moderate": "Questions 4"7: Use MODERATE tier (Que-18 to Que-34) " past experiences, conflict, initiative, adaptation.",
+        "hard": "Questions 8"10: Use DIFFICULT tier (Que-35 to Que-50) " high-stakes decisions, ambiguity, leadership under pressure.",
     }
 }

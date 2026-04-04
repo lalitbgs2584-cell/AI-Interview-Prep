@@ -1,5 +1,6 @@
 import { subscriber } from "../config/redis.config.js";
 import { storeToDB } from "../worker-helper/storeDb.worker-helper.js";
+import { io } from "../index.js";
 
 subscriber.subscribe('resume:processed', (err) => {
     if (err) console.error('Subscribe failed:', err);
@@ -17,6 +18,14 @@ subscriber.on('message', async (channel, message) => {
             }
             else{
                 console.log('Failed to store for user:', payload.user_id);
+            }
+            break;
+        case 'budget_exceeded':
+            if (payload?.user_id) {
+                io.to(`user:${payload.user_id}`).emit("budget_exceeded", {
+                    scope: "resume",
+                    message: payload.message || "Daily interview limit reached. Resets at midnight.",
+                });
             }
             break;
 

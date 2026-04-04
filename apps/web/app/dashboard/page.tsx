@@ -3,6 +3,8 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import React from "react";
 
+type UserRole = "USER" | "ADMIN";
+
 import DashboardApp from "@/components/dashboard/dashboard-components/pages/DashboardApp";
 
 export default async function DashboardPage() {
@@ -11,13 +13,14 @@ export default async function DashboardPage() {
     session = await auth.api.getSession({
       headers: await headers(),
     });
-  } catch (error) {
+  } catch (error) { }
 
-  }
+  if (!session) redirect("/login");
 
-  if (!session) {
-    redirect("/login");
-  }
-  console.log("session from dashboard page", session)
-  return <DashboardApp user={session?.user} />;
+  const user = {
+    ...session.user,
+    role: session.user.role as UserRole,
+  };
+
+  return <DashboardApp user={user} />;
 }

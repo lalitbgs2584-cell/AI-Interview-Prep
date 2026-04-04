@@ -52,6 +52,8 @@ interface SetupListenersConfig {
   }) => void;
   onIntentReply?: (reply: string) => void;
   onComplete?: () => void;
+  onBudgetExceeded?: (payload: { message: string; model?: string }) => void;
+  onJobFailed?: (payload: { message: string; scope?: string }) => void;
 }
 
 export class InterviewSocketManager {
@@ -201,6 +203,14 @@ export class InterviewSocketManager {
       config.onComplete?.();
     };
 
+    const handleBudgetExceeded = (payload: { message: string; model?: string }) => {
+      config.onBudgetExceeded?.(payload);
+    };
+
+    const handleJobFailed = (payload: { message: string; scope?: string }) => {
+      config.onJobFailed?.(payload);
+    };
+
     /**
      * Handle reconnection to socket.
      * Re-join the interview session.
@@ -213,11 +223,15 @@ export class InterviewSocketManager {
     socket.off("interview:question", handleQuestion);
     socket.off("interview:intent_reply", handleIntentReply);
     socket.off("interview:complete", handleComplete);
+    socket.off("budget_exceeded", handleBudgetExceeded);
+    socket.off("job_failed", handleJobFailed);
     socket.off("connect", handleReconnect);
 
     socket.on("interview:question", handleQuestion);
     socket.on("interview:intent_reply", handleIntentReply);
     socket.on("interview:complete", handleComplete);
+    socket.on("budget_exceeded", handleBudgetExceeded);
+    socket.on("job_failed", handleJobFailed);
     socket.on("connect", handleReconnect);
 
     // If already connected, join immediately
@@ -230,6 +244,8 @@ export class InterviewSocketManager {
       socket.off("interview:question", handleQuestion);
       socket.off("interview:intent_reply", handleIntentReply);
       socket.off("interview:complete", handleComplete);
+      socket.off("budget_exceeded", handleBudgetExceeded);
+      socket.off("job_failed", handleJobFailed);
       socket.off("connect", handleReconnect);
     };
   }

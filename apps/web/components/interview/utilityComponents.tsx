@@ -108,7 +108,7 @@ export function IdentityBadge({ status, mismatchCount }: IdentityBadgeProps) {
             display: "inline-block",
           }}
         />
-        {status === "enrolling" ? "Enrolling…" : "ID pending"}
+        {status === "enrolling" ? "Enrolling" : "ID pending"}
       </div>
     );
   }
@@ -168,7 +168,7 @@ export function IdentityBadge({ status, mismatchCount }: IdentityBadgeProps) {
             strokeLinecap="round"
           />
         </svg>
-        ID mismatch ×{mismatchCount}
+        ID mismatch -{mismatchCount}
       </div>
     );
   }

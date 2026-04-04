@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, useCallback } from "react";
 
-/* ─────────────────────────────────────────────
+/* """""""""""""""""""""""""""""""""""""""""""""
    useFaceIdentityVerification
    
    Sits ON TOP of the existing MediaPipe presence detection.
@@ -9,11 +9,11 @@ import { useEffect, useRef, useState, useCallback } from "react";
    This hook answers: "Is it the SAME face as when we started?"
 
    HOW IT WORKS:
-   1. On `startVerification()` — capture the reference descriptor from
+   1. On `startVerification()` " capture the reference descriptor from
       the current video frame. This is the enrolled face.
-   2. Every `checkIntervalMs` (default 6 s) — compare the current frame's
+   2. Every `checkIntervalMs` (default 6 s) " compare the current frame's
       face descriptor against the reference using euclidean distance.
-   3. If distance > THRESHOLD → `onMismatch` fires → caller handles it
+   3. If distance > THRESHOLD ' `onMismatch` fires ' caller handles it
       (show modal, end session, emit to backend, etc.)
    4. `stopVerification()` cancels the interval.
 
@@ -27,7 +27,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
      - ssd_mobilenetv1_model-weights_manifest.json + shards
      - face_landmark_68_model-weights_manifest.json + shards
      - face_recognition_model-weights_manifest.json + shards
-───────────────────────────────────────────── */
+""""""""""""""""""""""""""""""""""""""""""""" */
 
 export type IdentityStatus =
   | "idle"           // not yet enrolled
@@ -77,7 +77,7 @@ export function useFaceIdentityVerification({
   const loadingModelsRef = useRef(false);
   const mismatchCountRef = useRef(0);
 
-  // ── Load models once ──────────────────────────────────────────────────
+  // "" Load models once """"""""""""""""""""""""""""""""""""""""""""""""""
   const loadModels = useCallback(async () => {
     if (modelsLoadedRef.current || loadingModelsRef.current) return;
     loadingModelsRef.current = true;
@@ -102,7 +102,7 @@ export function useFaceIdentityVerification({
     }
   }, [onError]);
 
-  // ── Capture a single face descriptor from the video frame ─────────────
+  // "" Capture a single face descriptor from the video frame """""""""""""
   const captureDescriptor = useCallback(async (): Promise<Float32Array | null> => {
     const video = videoRef.current;
     if (!video || video.readyState < 2 || video.paused || video.videoWidth === 0) {
@@ -118,7 +118,7 @@ export function useFaceIdentityVerification({
     return detection?.descriptor ?? null;
   }, [videoRef]);
 
-  // ── Enroll: capture reference face ───────────────────────────────────
+  // "" Enroll: capture reference face """""""""""""""""""""""""""""""""""
   const startVerification = useCallback(async () => {
     if (!enabled) return;
 
@@ -152,14 +152,14 @@ export function useFaceIdentityVerification({
       onEnrolled?.();
       console.log("[FaceIdentity] Reference face enrolled");
 
-      // ── Start periodic verification ───────────────────────────────────
+      // "" Start periodic verification """""""""""""""""""""""""""""""""""
       intervalRef.current = setInterval(async () => {
         if (!referenceDescriptorRef.current) return;
 
         const current = await captureDescriptor();
 
         if (!current) {
-          // No face visible — MediaPipe handles this separately.
+          // No face visible " MediaPipe handles this separately.
           // We don't fire onMismatch here to avoid double-penalising.
           return;
         }
@@ -178,7 +178,7 @@ export function useFaceIdentityVerification({
           setStatus("mismatch");
           onMismatch?.(distance);
           console.warn(
-            `[FaceIdentity] MISMATCH #${mismatchCountRef.current} — distance=${distance.toFixed(4)}`
+            `[FaceIdentity] MISMATCH #${mismatchCountRef.current} " distance=${distance.toFixed(4)}`
           );
         } else {
           // If it was mismatch but face is back to matching, recover
@@ -193,7 +193,7 @@ export function useFaceIdentityVerification({
     }
   }, [enabled, loadModels, captureDescriptor, checkIntervalMs, threshold, onEnrolled, onMismatch, onError]);
 
-  // ── Stop ──────────────────────────────────────────────────────────────
+  // "" Stop """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
   const stopVerification = useCallback(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
@@ -202,7 +202,7 @@ export function useFaceIdentityVerification({
     console.log("[FaceIdentity] Verification stopped");
   }, []);
 
-  // ── Reset (e.g., after a false positive "I Fixed It" dismissal) ───────
+  // "" Reset (e.g., after a false positive "I Fixed It" dismissal) """""""
   const resetVerification = useCallback(() => {
     stopVerification();
     referenceDescriptorRef.current = null;
@@ -211,7 +211,7 @@ export function useFaceIdentityVerification({
     setStatus("idle");
   }, [stopVerification]);
 
-  // ── Auto-stop when disabled or unmounted ─────────────────────────────
+  // "" Auto-stop when disabled or unmounted """""""""""""""""""""""""""""
   useEffect(() => {
     if (!enabled) stopVerification();
     return () => stopVerification();

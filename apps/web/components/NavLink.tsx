@@ -5,8 +5,8 @@ import { useState } from "react";
 interface NavLinkProps {
   href: string;
   children: React.ReactNode;
-  cta?: boolean; // Sign Up  → solid coral
-  ctl?: boolean; // Log In  → ghost/outlined
+  cta?: boolean; // Sign Up  ' solid coral
+  ctl?: boolean; // Log In  ' ghost/outlined
 }
 
 export function NavLink({ href, children, cta, ctl }: NavLinkProps) {

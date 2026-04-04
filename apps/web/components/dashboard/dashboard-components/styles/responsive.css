@@ -1,7 +1,7 @@
-/* ══════════════════════════════════════
-   responsive.css  —  Breakpoint Overrides
+/* --------------------------------------
+   responsive.css  "  Breakpoint Overrides
    (profile breakpoints live in profile.css)
-══════════════════════════════════════ */
+-------------------------------------- */
 
 @media (max-width: 1100px) {
   :root { --sidebar-w: 200px; }

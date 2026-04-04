@@ -1,44 +1,49 @@
 {
-  "name": "ai-interview-preparator",
-  "version": "0.0.1",
-  "private": true,
-  "scripts": {
-    "build": "turbo build",
-    "dev": "turbo dev",
-    "lint": "turbo lint",
-    "db:generate": "cd packages/db && npx prisma generate && cd ../..",
-    "db:migrate": "cd packages/db && npx prisma migrate deploy && cd ../..",
-    "db:setup": "pnpm db:generate && pnpm db:migrate",
-    "format": "prettier --write \"**/*.{ts,tsx,md}\""
-  },
-  "devDependencies": {
-    "@workspace/eslint-config": "workspace:*",
-    "@workspace/typescript-config": "workspace:*",
-    "prettier": "^3.8.1",
-    "turbo": "^2.8.1",
-    "typescript": "5.9.3"
-  },
-  "packageManager": "pnpm@10.4.1",
-  "engines": {
-    "node": ">=20"
-  },
-  "workspaces": [
-    "packages/*",
-    "apps/*"
-  ],
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@prisma/client",
-      "@prisma/engines",
-      "better-sqlite3",
-      "core-js-pure",
-      "esbuild",
-      "prisma",
-      "sharp"
-    ]
-  },
-  "dependencies": {
-    "@prisma/adapter-pg": "^7.4.0",
-    "pg": "^8.18.0"
-  }
+    "name":  "ai-interview-preparator",
+    "version":  "0.0.1",
+    "private":  true,
+    "scripts":  {
+                    "build":  "turbo build",
+                    "dev":  "turbo dev",
+                    "start":  "turbo start",
+                    "lint":  "turbo lint",
+                    "db:generate":  "cd packages/db \u0026\u0026 npx prisma generate \u0026\u0026 cd ../..",
+                    "db:migrate":  "cd packages/db \u0026\u0026 npx prisma migrate deploy \u0026\u0026 cd ../..",
+                    "db:setup":  "pnpm db:generate \u0026\u0026 pnpm db:migrate",
+                    "format":  "prettier --write \"**/*.{ts,tsx,md}\"",
+                    "start:web":  "pnpm --dir apps/web start",
+                    "start:admin":  "pnpm --dir apps/admin start",
+                    "start:ws-backend":  "pnpm --dir apps/ws-backend start",
+                    "start:ai-workers":  "python apps/ai-workers/app/main.py"
+                },
+    "devDependencies":  {
+                            "@workspace/eslint-config":  "workspace:*",
+                            "@workspace/typescript-config":  "workspace:*",
+                            "prettier":  "^3.8.1",
+                            "turbo":  "^2.8.1",
+                            "typescript":  "5.9.3"
+                        },
+    "packageManager":  "pnpm@10.4.1",
+    "engines":  {
+                    "node":  "\u003e=20"
+                },
+    "workspaces":  [
+                       "packages/*",
+                       "apps/*"
+                   ],
+    "pnpm":  {
+                 "onlyBuiltDependencies":  [
+                                               "@prisma/client",
+                                               "@prisma/engines",
+                                               "better-sqlite3",
+                                               "core-js-pure",
+                                               "esbuild",
+                                               "prisma",
+                                               "sharp"
+                                           ]
+             },
+    "dependencies":  {
+                         "@prisma/adapter-pg":  "^7.4.0",
+                         "pg":  "^8.18.0"
+                     }
 }

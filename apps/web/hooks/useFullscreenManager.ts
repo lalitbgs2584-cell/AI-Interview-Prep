@@ -1,31 +1,21 @@
-/**
- * ============================================================================
- * useFullscreenManager Hook
- * ============================================================================
- * 
- * Manages fullscreen state and detects fullscreen exits.
- * 
- * Features:
- *  - Track fullscreen state
- *  - Detect exits and show warnings (max 2 exits = termination)
- *  - Handle reentry after warnings
- * 
- * Returns:
- *  - isFullscreen: boolean
- *  - fsWarningCount: number (0-2)
- *  - showFsWarning: boolean
- *  - handleGateEnter: async function
- *  - handleReenterFullscreen: async function
- * 
- * ============================================================================
- */
+// Keeps the interview in fullscreen and handles warning / retry state when
+// the user exits it.
 
 import { useState, useRef, useCallback, useEffect } from "react";
+
+type FullscreenCapableElement = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void;
+};
+
+type WebkitFullscreenDocument = Document & {
+  webkitFullscreenElement?: Element | null;
+};
 
 interface UseFullscreenManagerProps {
   showGate: boolean;
   isEnding: boolean;
   sessionRunning: boolean;
+  fullscreenExempt?: boolean;
   onTerminate: (reason: "fullscreen") => void;
 }
 
@@ -33,6 +23,7 @@ export function useFullscreenManager({
   showGate,
   isEnding,
   sessionRunning,
+  fullscreenExempt = false,
   onTerminate,
 }: UseFullscreenManagerProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -43,62 +34,63 @@ export function useFullscreenManager({
   const hasEnteredFsOnce = useRef(false);
   const suppressFsExitRef = useRef(false);
 
-  /**
-   * Request fullscreen mode for the entire document.
-   */
   const enterFullscreen = useCallback(async () => {
     try {
-      const el = document.documentElement;
-      if (el.requestFullscreen) await el.requestFullscreen();
-      else if ((el as any).webkitRequestFullscreen)
-        await (el as any).webkitRequestFullscreen();
+      const el = document.documentElement as FullscreenCapableElement;
+      if (typeof el.requestFullscreen === "function") {
+        await el.requestFullscreen();
+      } else if (typeof el.webkitRequestFullscreen === "function") {
+        await Promise.resolve(el.webkitRequestFullscreen());
+      }
       hasEnteredFsOnce.current = true;
       setIsFullscreen(true);
+      setShowFsWarning(false);
     } catch (err) {
       console.warn("[fullscreen] enter failed:", err);
     }
   }, []);
 
-  /**
-   * Called from gate modal - enters fullscreen and dismisses gate.
-   */
   const handleGateEnter = useCallback(async () => {
     await enterFullscreen();
   }, [enterFullscreen]);
 
-  /**
-   * Exits fullscreen (called on first warning retry).
-   */
   const handleReenterFullscreen = useCallback(async () => {
-    // If user already exited fullscreen twice, terminate session
+    if (fullscreenExempt) {
+      setShowFsWarning(false);
+      return;
+    }
+
     if (fsWarningCountRef.current >= 2) {
       onTerminate("fullscreen");
       return;
     }
+
     setShowFsWarning(false);
     await enterFullscreen();
-  }, [enterFullscreen, onTerminate]);
+  }, [enterFullscreen, fullscreenExempt, onTerminate]);
 
-  /**
-   * Monitor fullscreen changes.
-   * If user exits fullscreen more than once, warn and eventually terminate.
-   */
+  useEffect(() => {
+    if (fullscreenExempt) {
+      setShowFsWarning(false);
+    }
+  }, [fullscreenExempt]);
+
   useEffect(() => {
     const onChange = () => {
       const inFs =
-        !!document.fullscreenElement || !!(document as any).webkitFullscreenElement;
+        !!document.fullscreenElement || !!(document as WebkitFullscreenDocument).webkitFullscreenElement;
       setIsFullscreen(inFs);
 
-      // Don't trigger warning if:
-      // - User just entered fullscreen
-      // - User has never entered fullscreen
-      // - Exit is being suppressed (by our code)
-      // - Session is ending
-      // - Session is not running
+      if (inFs) {
+        setShowFsWarning(false);
+        suppressFsExitRef.current = false;
+        return;
+      }
+
       if (
-        inFs ||
         !hasEnteredFsOnce.current ||
         suppressFsExitRef.current ||
+        fullscreenExempt ||
         isEnding ||
         !sessionRunning
       ) {
@@ -106,14 +98,12 @@ export function useFullscreenManager({
         return;
       }
 
-      // Increment exit count and show warning
       fsWarningCountRef.current += 1;
-      const n = fsWarningCountRef.current;
-      setFsWarningCount(n);
+      const nextCount = fsWarningCountRef.current;
+      setFsWarningCount(nextCount);
       setShowFsWarning(true);
 
-      // On second exit, terminate immediately
-      if (n >= 2) {
+      if (nextCount >= 2) {
         setTimeout(() => onTerminate("fullscreen"), 800);
       }
     };
@@ -125,7 +115,7 @@ export function useFullscreenManager({
       document.removeEventListener("fullscreenchange", onChange);
       document.removeEventListener("webkitfullscreenchange", onChange);
     };
-  }, [isEnding, sessionRunning, onTerminate]);
+  }, [fullscreenExempt, isEnding, sessionRunning, onTerminate]);
 
   return {
     isFullscreen,
@@ -133,6 +123,6 @@ export function useFullscreenManager({
     showFsWarning,
     handleGateEnter,
     handleReenterFullscreen,
-    suppressFsExitRef, // For internal use in endSession
+    suppressFsExitRef,
   };
 }

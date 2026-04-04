@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
   if (!user)
     return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  // ── Activity map & streak ──────────────────────────────────────────────
+  // "" Activity map & streak """"""""""""""""""""""""""""""""""""""""""""""
   const todayIso = new Date().toISOString().slice(0, 10);
   const activityMap = (user.activityMap as Record<string, number>) ?? {};
   activityMap[todayIso] = (activityMap[todayIso] ?? 0) + 1;
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
   const finalStatus = endReason === "completed" ? "COMPLETED" : "CANCELLED";
 
-  // ── Run both updates in parallel ──────────────────────────────────────
+  // "" Run both updates in parallel """"""""""""""""""""""""""""""""""""""
   await Promise.all([
     prisma.user.update({
       where: { id: userId },

@@ -30,7 +30,21 @@ interface InterviewCompleteEvent {
     };
 }
 
-type InterviewEvent = QuestionEvent | InterviewCompleteEvent;
+interface IntentReplyEvent {
+    type: "intent_reply";
+    intent: string;
+    reply: string;
+    index?: number;
+}
+
+interface BudgetExceededEvent {
+    type: "budget_exceeded";
+    error: "BUDGET_EXCEEDED";
+    model?: string;
+    message: string;
+}
+
+type InterviewEvent = QuestionEvent | InterviewCompleteEvent | IntentReplyEvent | BudgetExceededEvent;
 
 // -----------------------------
 // PATTERN MESSAGE HANDLER
@@ -48,7 +62,7 @@ subscriber.on("pmessage", async (pattern: string, channel: string, message: stri
         return;
     }
 
-    // channel format → interview:12345:events
+    // channel format ' interview:12345:events
     const interviewId = channel.split(":")[1];
     console.log("In interview creation wokers helpers.")
     console.log(`[interview:${interviewId}] Event received: ${data.type}`);
@@ -60,9 +74,9 @@ subscriber.on("pmessage", async (pattern: string, channel: string, message: stri
         // Fired:        once per question (including follow-ups)
         //
         // On first question (index 0, difficulty "intro"):
-        //   → Show warm intro prompt to candidate UI
+        //   ' Show warm intro prompt to candidate UI
         // On follow-ups:
-        //   → publish_question is re-entered WITHOUT generate_question,
+        //   ' publish_question is re-entered WITHOUT generate_question,
         //     so index will be the SAME as the previous question but
         //     current_question will be the follow-up text from evaluate_answer
         // -----------------------------------------------------------------
@@ -71,10 +85,10 @@ subscriber.on("pmessage", async (pattern: string, channel: string, message: stri
 
             const payload = {
                 interviewId,
-                index,           // ← was "questionNumber", change to "index"
+                index,           //  was "questionNumber", change to "index"
                 difficulty,
                 question,
-                time: time ?? Date.now(),  // ← add time
+                time: time ?? Date.now(),  //  add time
             };
 
             await redisClient.set(
@@ -82,6 +96,7 @@ subscriber.on("pmessage", async (pattern: string, channel: string, message: stri
                 JSON.stringify(payload),
                 "EX", 3600
             );
+
 
             io.to(`interview:${interviewId}`).emit("interview:question", payload);
             break;
@@ -112,6 +127,47 @@ subscriber.on("pmessage", async (pattern: string, channel: string, message: stri
                 summary,
             });
 
+
+            break;
+        }
+
+        // -----------------------------------------------------------------
+        // Published by: classify_answer_intent node
+        // Fired:        on meta_request / question / violations
+        // -----------------------------------------------------------------
+        case "intent_reply": {
+            const { reply, intent, index } = data as IntentReplyEvent;
+
+            if (!reply) break;
+
+            const guardrailIntents = new Set([
+                "language_violation",
+                "conduct_violation",
+                "security_violation",
+            ]);
+
+            if (!guardrailIntents.has(String(intent))) {
+                break;
+            }
+
+            io.to(`interview:${interviewId}`).emit("interview:intent_reply", {
+                interviewId,
+                reply,
+                intent,
+                index,
+            });
+            
+
+            break;
+        }
+        case "budget_exceeded": {
+            const { message, model } = data as BudgetExceededEvent;
+
+            io.to(`interview:${interviewId}`).emit("budget_exceeded", {
+                interviewId,
+                model,
+                message,
+            });
             break;
         }
 

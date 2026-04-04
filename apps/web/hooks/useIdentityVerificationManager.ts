@@ -9,11 +9,11 @@
  *
  * Flow:
  *  1. Models load on mount (tiny detector + landmarks + recognition net)
- *  2. On `enabled` becoming true → wait 1.5s → enroll reference face
- *  3. Every `checkIntervalMs` → compare current face to reference
- *  4. distance > threshold → mismatch
- *  5. 1st mismatch → show warning modal with 20s countdown
- *  6. 2nd mismatch → terminate immediately
+ *  2. On `enabled` becoming true ' wait 1.5s ' enroll reference face
+ *  3. Every `checkIntervalMs` ' compare current face to reference
+ *  4. distance > threshold ' mismatch
+ *  5. 1st mismatch ' show warning modal with 20s countdown
+ *  6. 2nd mismatch ' terminate immediately
  *
  * ============================================================================
  */
@@ -44,7 +44,7 @@ interface UseIdentityVerificationManagerProps {
 }
 
 // ---------------------------------------------------------------------------
-// Lazy face-api loader — only imported once, cached in module scope
+// Lazy face-api loader " only imported once, cached in module scope
 // ---------------------------------------------------------------------------
 
 let faceApiPromise: Promise<typeof import("@vladmandic/face-api")> | null = null;
@@ -56,9 +56,14 @@ async function loadFaceApi() {
   return faceApiPromise;
 }
 
-// Models are served from /public/models — copy weights there from:
+// Models are served from /public/models " copy weights there from:
 // https://github.com/vladmandic/face-api/tree/master/model
-const MODEL_URL = "/models";
+// Fallback to CDN if local files are missing or corrupted.
+const MODEL_URLS = [
+  "/models",
+  "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model",
+];
+let activeModelUrl = MODEL_URLS[0];
 
 let modelsLoadedPromise: Promise<void> | null = null;
 
@@ -66,11 +71,23 @@ async function ensureModelsLoaded() {
   if (!modelsLoadedPromise) {
     modelsLoadedPromise = (async () => {
       const faceapi = await loadFaceApi();
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-        faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL),
-        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
-      ]);
+      let lastErr: unknown = null;
+
+      for (const url of MODEL_URLS) {
+        try {
+          await Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri(url),
+            faceapi.nets.faceLandmark68TinyNet.loadFromUri(url),
+            faceapi.nets.faceRecognitionNet.loadFromUri(url),
+          ]);
+          activeModelUrl = url;
+          return;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+
+      throw lastErr ?? new Error("Failed to load face-api models");
     })();
   }
   return modelsLoadedPromise;
@@ -111,7 +128,7 @@ export function useIdentityVerificationManager({
     setIdentityStatus(s);
   }, []);
 
-  // ── 1. Load models on mount ────────────────────────────────────────
+  // "" 1. Load models on mount """"""""""""""""""""""""""""""""""""""""
   useEffect(() => {
     let cancelled = false;
     updateStatus("loading");
@@ -121,6 +138,7 @@ export function useIdentityVerificationManager({
         if (!cancelled) {
           setModelsReady(true);
           updateStatus("idle");
+          console.log(`[identity] models loaded from ${activeModelUrl}`);
         }
       })
       .catch((err) => {
@@ -134,7 +152,7 @@ export function useIdentityVerificationManager({
     return () => { cancelled = true; };
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── 2. Enroll reference face ───────────────────────────────────────
+  // "" 2. Enroll reference face """""""""""""""""""""""""""""""""""""""
   const enrollFace = useCallback(async () => {
     if (!videoRef.current) return;
     if (!modelsReady) return;
@@ -146,7 +164,7 @@ export function useIdentityVerificationManager({
       const faceapi = await loadFaceApi();
       const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 });
 
-      // Retry up to 5 times — video may not have a clear frame immediately
+      // Retry up to 5 times " video may not have a clear frame immediately
       let detection: { descriptor: Float32Array } | undefined;
       for (let attempt = 0; attempt < 5; attempt++) {
         const result = await faceapi
@@ -184,7 +202,7 @@ export function useIdentityVerificationManager({
     }
   }, [videoRef, modelsReady, updateStatus, onEnrolled, onError]);
 
-  // ── 3. Verify current face against enrolled descriptor ────────────
+  // "" 3. Verify current face against enrolled descriptor """"""""""""
   const verifyFace = useCallback(async (): Promise<number | null> => {
     if (!videoRef.current) return null;
     if (!enrolledDescriptorRef.current) return null;
@@ -199,7 +217,7 @@ export function useIdentityVerificationManager({
         .withFaceLandmarks(true)
         .withFaceDescriptor();
 
-      if (!result) return null;  // no face — Layer 1 handles absence
+      if (!result) return null;  // no face " Layer 1 handles absence
 
       const distance = faceapi.euclideanDistance(
         enrolledDescriptorRef.current,
@@ -214,7 +232,7 @@ export function useIdentityVerificationManager({
     }
   }, [videoRef]);
 
-  // ── 4. Trigger mismatch logic ─────────────────────────────────────
+  // "" 4. Trigger mismatch logic """""""""""""""""""""""""""""""""""""
   const triggerMismatch = useCallback((distance: number) => {
     mismatchCountRef.current += 1;
     const n = mismatchCountRef.current;
@@ -222,29 +240,29 @@ export function useIdentityVerificationManager({
     onMismatch?.(distance);
 
     if (n >= 2) {
-      // 2nd mismatch — terminate immediately, no modal needed
+      // 2nd mismatch " terminate immediately, no modal needed
       updateStatus("mismatch");
       setTimeout(() => onTerminate?.("identity_mismatch"), 800);
       return;
     }
 
-    // 1st mismatch — show warning modal with countdown
+    // 1st mismatch " show warning modal with countdown
     updateStatus("mismatch");
     setIdentityCountdown(20);
     setShowIdentityModal(true);
   }, [updateStatus, onMismatch, onTerminate]);
 
-  // ── 5. Verification interval — runs when enrolled ─────────────────
+  // "" 5. Verification interval " runs when enrolled """""""""""""""""
   useEffect(() => {
     if (identityStatus !== "enrolled" || !enabled) return;
     if (verificationIntervalRef.current) return;  // already running
 
     verificationIntervalRef.current = setInterval(async () => {
       const distance = await verifyFace();
-      if (distance === null) return;  // no face or error — not our concern here
+      if (distance === null) return;  // no face or error " not our concern here
 
       if (distance > threshold) {
-        // Stop the interval before triggering — triggerMismatch may terminate
+        // Stop the interval before triggering " triggerMismatch may terminate
         clearInterval(verificationIntervalRef.current!);
         verificationIntervalRef.current = null;
         triggerMismatch(distance);
@@ -259,7 +277,7 @@ export function useIdentityVerificationManager({
     };
   }, [identityStatus, enabled, checkIntervalMs, threshold, verifyFace, triggerMismatch]);
 
-  // ── 6. Countdown timer for warning modal ──────────────────────────
+  // "" 6. Countdown timer for warning modal """"""""""""""""""""""""""
   useEffect(() => {
     if (!showIdentityModal) return;
 
@@ -280,7 +298,7 @@ export function useIdentityVerificationManager({
     };
   }, [showIdentityModal, onTerminate]);
 
-  // ── 7. Auto-enroll when enabled and models are ready ─────────────
+  // "" 7. Auto-enroll when enabled and models are ready """""""""""""
   useEffect(() => {
     if (!enabled || !modelsReady || statusRef.current !== "idle") return;
 
@@ -292,7 +310,7 @@ export function useIdentityVerificationManager({
     return () => clearTimeout(timer);
   }, [enabled, modelsReady, enrollFace]);
 
-  // ── 8. Cleanup on unmount ─────────────────────────────────────────
+  // "" 8. Cleanup on unmount """""""""""""""""""""""""""""""""""""""""
   useEffect(() => {
     return () => {
       if (verificationIntervalRef.current) clearInterval(verificationIntervalRef.current);
@@ -300,7 +318,7 @@ export function useIdentityVerificationManager({
     };
   }, []);
 
-  // ── Dismiss handler ───────────────────────────────────────────────
+  // "" Dismiss handler """""""""""""""""""""""""""""""""""""""""""""""
   const handleDismissIdentityModal = useCallback(() => {
     if (mismatchCountRef.current >= 2) {
       onTerminate?.("identity_mismatch");
@@ -320,7 +338,7 @@ export function useIdentityVerificationManager({
     setTimeout(() => enrollFace(), 800);
   }, [updateStatus, enrollFace, onTerminate]);
 
-  // ── Stop verification ─────────────────────────────────────────────
+  // "" Stop verification """""""""""""""""""""""""""""""""""""""""""""
   const stopVerification = useCallback(() => {
     if (verificationIntervalRef.current) {
       clearInterval(verificationIntervalRef.current);

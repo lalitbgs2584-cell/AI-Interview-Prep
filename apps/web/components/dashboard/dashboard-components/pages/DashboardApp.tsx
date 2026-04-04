@@ -19,12 +19,12 @@ interface DashboardAppProps {
 }
 
 const NAV_ITEMS: { icon: string; label: string; page: Page }[] = [
-  { icon: "⊞", label: "Dashboard", page: "dashboard" },
-  { icon: "◈", label: "Interviews", page: "interviews" },
-  { icon: "◎", label: "Progress", page: "progress" },
-  { icon: "⬡", label: "Skills", page: "skills" },
-  { icon: "⊡", label: "Resume", page: "resume" },
-  { icon: "⊟", label: "History", page: "history" },
+  { icon: "", label: "Dashboard", page: "dashboard" },
+  { icon: "-", label: "Interviews", page: "interviews" },
+  { icon: "-", label: "Progress", page: "progress" },
+  { icon: "", label: "Skills", page: "skills" },
+  { icon: "", label: "Resume", page: "resume" },
+  { icon: "", label: "History", page: "history" },
 ];
 
 const AI_TIP = {
@@ -77,12 +77,12 @@ export default function DashboardApp({ user }: DashboardAppProps) {
   return (
     <>
       <div className="noise" />
-      <button className="mobile-menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Open navigation">☰</button>
+      <button className="mobile-menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Open navigation"></button>
       <div className={`sidebar-overlay ${sidebarOpen ? "open" : ""}`} onClick={() => setSidebarOpen(false)} />
 
       <div className="dash-root">
         <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
-          <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)} aria-label="Close navigation">✕</button>
+          <button className="sidebar-close-btn" onClick={() => setSidebarOpen(false)} aria-label="Close navigation">-</button>
           <button className="sidebar-logo" onClick={() => navigate("dashboard")}>Interview<span>AI</span></button>
 
           <nav className="sidebar-nav">
@@ -102,7 +102,7 @@ export default function DashboardApp({ user }: DashboardAppProps) {
             <div className="sidebar-tip-header"><span className="sidebar-tip-label">AI Coach</span></div>
             <div className="sidebar-tip-title">{AI_TIP.title}</div>
             <div className="sidebar-tip-body">{AI_TIP.body}</div>
-            <button className="sidebar-tip-btn" onClick={() => navigate("interviews")}>Start session →</button>
+            <button className="sidebar-tip-btn" onClick={() => navigate("interviews")}>Start session '</button>
           </div>
 
           <button
@@ -119,9 +119,9 @@ export default function DashboardApp({ user }: DashboardAppProps) {
               <div className="sidebar-user-role">
                 {userRole === "ADMIN" ? "Admin" : "Software Engineer"}
               </div>
-              {streak > 0 && <span className="sidebar-user-hint">🔥 {streak}-day streak</span>}
+              {streak > 0 && <span className="sidebar-user-hint">" {streak}-day streak</span>}
             </div>
-            <span style={{ color: "hsl(var(--muted-foreground))", fontSize: "0.7rem", flexShrink: 0 }}>›</span>
+            <span style={{ color: "hsl(var(--muted-foreground))", fontSize: "0.7rem", flexShrink: 0 }}></span>
           </button>
         </aside>
 
@@ -136,14 +136,13 @@ export default function DashboardApp({ user }: DashboardAppProps) {
           {activePage === "interviews" && <InterviewsPage />}
           {activePage === "progress" && <ProgressPage />}
           {activePage === "skills" && <SkillsPage />}
-          {activePage === "resume" && <ResumePage />}
+          {activePage === "resume" && <ResumePage userId={(user as { id?: string } | undefined)?.id ?? ""} />}
           {activePage === "history" && <HistoryPage />}
 
-          {/* ProfilePage receives the full user object — no prop spreading needed */}
+          {/* ProfilePage receives the full user object " no prop spreading needed */}
           {activePage === "profile" && <ProfilePage />}
         </main>
       </div>
     </>
   );
 }
-

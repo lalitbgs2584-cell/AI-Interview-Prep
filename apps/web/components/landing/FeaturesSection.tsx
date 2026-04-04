@@ -11,7 +11,7 @@ export function FeaturesSection() {
         Everything you need<br />to prepare smarter
       </h2>
       <p style={{ color: "var(--muted)", maxWidth: 520, marginBottom: "4rem", fontSize: "1.05rem", lineHeight: 1.7 }}>
-        A full-stack AI pipeline built around your success — not generic interview scripts.
+        A full-stack AI pipeline built around your success " not generic interview scripts.
       </p>
       <div ref={featRef} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "1.25rem" }}>
         {FEATURES.map((f, i) => <FeatureCard key={i} {...f} visible={featVisible} delay={i * 0.1} />)}

@@ -5,7 +5,7 @@ export function Footer() {
         <a href="#" style={{ fontFamily: "var(--ff-display)", fontSize: "1.2rem", fontWeight: 800, letterSpacing: "-0.03em", color: "var(--text)", textDecoration: "none" }}>
           interview<span style={{ color: "var(--accent)" }}>AI</span>
         </a>
-        <span>© 2026 InterviewAI. All rights reserved.</span>
+        <span> 2026 InterviewAI. All rights reserved.</span>
       </div>
     </footer>
   );

@@ -1,29 +1,5 @@
-/**
- * ============================================================================
- * useFaceDetectionManager Hook
- * ============================================================================
- *
- * Manages face presence detection using MediaPipe FaceDetector.
- * This is Layer 1: Are there faces in frame?
- * (Layer 2 is identity verification - is it the same person?)
- *
- * Features:
- *  - Detects if face is present / missing / multiple
- *  - Tracks violation count (terminate on 2nd violation)
- *  - Shows countdown warning (15 seconds per violation)
- *  - Grace period (3 frames) to avoid false positives
- *
- * Returns:
- *  - faceStatus: "ok" | "no-face" | "multiple"
- *  - faceCount: number of faces detected
- *  - modelsReady: boolean (models loaded)
- *  - showFaceModal: boolean
- *  - faceCountdown: number (15 to 0)
- *  - faceViolationCount: number (1 or 2)
- *  - handleDismissFaceModal: function
- *
- * ============================================================================
- */
+// Tracks whether the frame contains exactly one face. Identity verification is
+// handled separately; this hook only checks presence and count.
 
 'use client';
 import { useState, useRef, useCallback, useEffect } from "react";
@@ -67,7 +43,7 @@ export function useFaceDetectionManager({
   const GRACE_FRAMES = 3;
   const POLL_INTERVAL_MS = 600;
 
-  // ── Load MediaPipe model once on mount ────────────────────────────
+  // Load the face detector once and reuse it for the whole session.
   useEffect(() => {
     let cancelled = false;
 
@@ -104,7 +80,7 @@ export function useFaceDetectionManager({
     };
   }, []);
 
-  // ── Detection polling loop ─────────────────────────────────────────
+  // Poll the current frame on a small interval instead of every animation frame.
   useEffect(() => {
     if (!modelsReady || !enabled) {
       badFrames.current = 0;
@@ -182,20 +158,18 @@ export function useFaceDetectionManager({
     };
   }, [modelsReady, enabled, videoRef]);
 
-  // ── Show / hide modal based on face status ────────────────────────
-  // FIX: was `if (!modelsReady)` — must be `if (modelsReady)`
+  // "" Show / hide modal based on face status """"""""""""""""""""""""
+  // Open the warning modal when the frame is missing a face or contains more than one.
   useEffect(() => {
     if (!modelsReady) return;
 
     if (faceStatus !== "ok" && !showFaceModal) {
-      // Increment violation count
       faceViolationCountRef.current += 1;
       const count = faceViolationCountRef.current;
       setFaceViolationCount(count);
       setFaceCountdown(15);
       setShowFaceModal(true);
 
-      // Terminate immediately on 2nd violation (after short delay for UX)
       if (count >= 2) {
         setTimeout(() => onTerminate("face_violation"), 800);
       }
@@ -208,7 +182,7 @@ export function useFaceDetectionManager({
     }
   }, [faceStatus, modelsReady, showFaceModal, onTerminate]);
 
-  // ── Countdown timer — terminate on 0 ──────────────────────────────
+  // Give the user a short window to recover before ending the session.
   useEffect(() => {
     if (!showFaceModal) return;
 
@@ -228,7 +202,7 @@ export function useFaceDetectionManager({
     };
   }, [showFaceModal, onTerminate]);
 
-  // ── Dismiss handler ───────────────────────────────────────────────
+  // Let the user close the modal once they are back in frame.
   const handleDismissFaceModal = useCallback(() => {
     if (faceCountdownRef.current) clearInterval(faceCountdownRef.current);
     setShowFaceModal(false);

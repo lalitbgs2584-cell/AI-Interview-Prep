@@ -15,7 +15,7 @@ const session = await auth.api.getSession({
 
         const userId = session.user.id;
 
-        // ─ Fetch recent interviews with full context
+        // " Fetch recent interviews with full context
         const interviews = await prisma.interview.findMany({
             where: {
                 userId,
@@ -42,7 +42,7 @@ const session = await auth.api.getSession({
             take: 10, // Get last 10 sessions
         });
 
-        // ─ Transform to frontend format
+        // " Transform to frontend format
         const transformedInterviews = interviews.map((interview) => {
             // Get scores from all questions in the interview
             const questionScores = interview.questions

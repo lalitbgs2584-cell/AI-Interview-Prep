@@ -1,7 +1,8 @@
-"use client";
+﻿"use client";
 import { useEffect, useState } from "react";
+import { SkillCategoryBars, SkillConstellation } from "./skills-visuals";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// "" Types """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 type Skill = {
   id:       string;
@@ -22,7 +23,7 @@ interface SkillsInsights {
   interviewsCovered:  string[];
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// "" Helpers """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 function scoreColor(score: number): string {
   if (score >= 75) return "var(--positive, #00e5b0)";
@@ -37,7 +38,7 @@ function scoreLabel(score: number): string {
   return "Needs Work";
 }
 
-// ── Skeleton ──────────────────────────────────────────────────────────────────
+// "" Skeleton """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 function Skeleton({ h = 48, w = "100%" }: { h?: number; w?: string }) {
   return (
@@ -51,7 +52,7 @@ function Skeleton({ h = 48, w = "100%" }: { h?: number; w?: string }) {
   );
 }
 
-// ── Score bar ─────────────────────────────────────────────────────────────────
+// "" Score bar """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 function ScoreBar({ label, score }: { label: string; score: number }) {
   return (
@@ -75,7 +76,7 @@ function ScoreBar({ label, score }: { label: string; score: number }) {
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+// "" Main component """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 export default function SkillsPage() {
   const [data,    setData]    = useState<SkillsInsights | null>(null);
@@ -108,12 +109,13 @@ export default function SkillsPage() {
   }, {});
 
   const hasInterviewData = data && Object.keys(data.categoryAverages).length > 0;
+  const skillList = data?.skills ?? [];
 
   return (
     <>
       <style>{`@keyframes pulse { 0%,100%{opacity:.5} 50%{opacity:.2} }`}</style>
 
-      {/* ── Top bar ── */}
+      {/* "" Top bar "" */}
       <div className="dash-topbar">
         <div>
           <div className="dash-greeting">Skill <em>Breakdown</em></div>
@@ -121,7 +123,7 @@ export default function SkillsPage() {
         </div>
       </div>
 
-      {/* ── Stat cards ── */}
+      {/* "" Stat cards "" */}
       <div className="stats-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
 
         {/* Strongest */}
@@ -179,98 +181,66 @@ export default function SkillsPage() {
               <div className="dash-stat-value">
                 {data.overallAvg}<span className="dash-stat-unit">/ 100</span>
               </div>
-              <div className="dash-stat-delta">{scoreLabel(data.overallAvg)} · {data.totalInterviews} interview{data.totalInterviews !== 1 ? "s" : ""} taken</div>
+              <div className="dash-stat-delta">{scoreLabel(data.overallAvg)} - {data.totalInterviews} interview{data.totalInterviews !== 1 ? "s" : ""} taken</div>
             </>
           ) : (
             <>
-              <div className="dash-stat-value" style={{ fontSize: "1rem", color: "var(--text-3)" }}>—</div>
+              <div className="dash-stat-value" style={{ fontSize: "1rem", color: "var(--text-3)" }}>"</div>
               <div className="dash-stat-delta">No interviews completed yet</div>
             </>
           )}
         </div>
       </div>
 
-      {/* ── Performance by interview type ── */}
       {(loading || hasInterviewData) && (
         <div className="panel">
           <div className="panel-header">
             <div>
-              <div className="panel-title">Performance by Category</div>
-              <div className="panel-sub">Average scores across completed interviews</div>
+              <div className="panel-title">Skill performance map</div>
+              <div className="panel-sub">A cleaner bar view of how each interview category is trending</div>
             </div>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            {loading
-              ? [...Array(3)].map((_, i) => <Skeleton key={i} h={38} />)
-              : Object.entries(data!.categoryAverages)
-                  .sort((a, b) => b[1] - a[1])
-                  .map(([label, score]) => (
-                    <ScoreBar key={label} label={label} score={score} />
-                  ))
-            }
-          </div>
+          {loading ? (
+            <div style={{ display: "grid", gap: "1rem" }}>
+              {[...Array(3)].map((_, i) => <Skeleton key={i} h={72} />)}
+            </div>
+          ) : (
+            <SkillCategoryBars categoryAverages={data!.categoryAverages} />
+          )}
         </div>
       )}
 
-      {/* ── Skills from resume ── */}
       <div className="panel">
         <div className="panel-header">
           <div>
-            <div className="panel-title">All Skills</div>
-            <div className="panel-sub">Extracted from your resume</div>
+            <div className="panel-title">Skill constellation</div>
+            <div className="panel-sub">A cluster-first view of your resume skills, grouped by the domains they belong to</div>
           </div>
           {!loading && data && (
             <span style={{
-              fontFamily:   "var(--ff-mono)",
-              fontSize:     "0.72rem",
-              color:        "var(--muted)",
-              background:   "var(--card-2)",
-              border:       "1px solid var(--border)",
+              fontFamily: "var(--ff-mono)",
+              fontSize: "0.72rem",
+              color: "var(--muted)",
+              background: "var(--card-2)",
+              border: "1px solid var(--border)",
               borderRadius: "999px",
-              padding:      "0.25rem 0.75rem",
+              padding: "0.25rem 0.75rem",
             }}>
               {data.skills.length} skills
             </span>
           )}
         </div>
 
-        <div className="skill-list skill-list-lg">
-          {loading ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              {[...Array(3)].map((_, i) => <Skeleton key={i} h={72} />)}
-            </div>
-          ) : !error && Object.keys(grouped).length > 0 ? (
-            Object.entries(grouped).map(([category, categorySkills]) => (
-              <div key={category} style={{ marginBottom: "1.5rem" }}>
-                {/* Category heading */}
-                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.6rem" }}>
-                  <span style={{ fontSize: "0.72rem", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-2)" }}>
-                    {category}
-                  </span>
-                  <span style={{ fontSize: "0.7rem", color: "var(--text-3, var(--text-2))", background: "var(--surface-2, rgba(255,255,255,0.06))", borderRadius: "999px", padding: "0.1rem 0.5rem" }}>
-                    {categorySkills.length}
-                  </span>
-                  <div style={{ flex: 1, height: "1px", background: "var(--border, rgba(255,255,255,0.08))" }} />
-                </div>
-                {/* Skill chips */}
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-                  {categorySkills.map((s) => (
-                    <span key={s.id} className="skill-name" style={{ padding: "0.35rem 0.8rem", borderRadius: "999px", fontSize: "0.8rem", border: "1px solid var(--border, rgba(255,255,255,0.1))", background: "var(--surface-2, rgba(255,255,255,0.04))", color: "var(--text-1)" }}>
-                      {s.name}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))
-          ) : (
-            <div style={{ color: "var(--text-2)", fontSize: "0.85rem" }}>
-              No skills yet — upload your resume to populate this.
-            </div>
-          )}
-        </div>
+        {loading ? (
+          <div style={{ display: "grid", gap: "1rem" }}>
+            {[...Array(2)].map((_, i) => <Skeleton key={i} h={220} />)}
+          </div>
+        ) : (
+          <SkillConstellation skills={skillList} />
+        )}
       </div>
 
-      {/* ── Upcoming skills to pursue ── */}
+      {/* "" Upcoming skills to pursue "" */}
       <div className="panel">
         <div className="panel-header">
           <div>
@@ -331,13 +301,13 @@ export default function SkillsPage() {
               className="resume-action-btn primary"
               onClick={() => window.location.href = "/dashboard/resume"}
             >
-              ⚡ Start Recommended Session
+               Start Recommended Session
             </button>
           </div>
         )}
       </div>
 
-      {/* ── Interview coverage chips ── */}
+      {/* "" Interview coverage chips "" */}
       {!loading && data && data.interviewsCovered.length > 0 && (
         <div className="panel">
           <div className="panel-header">
@@ -359,7 +329,7 @@ export default function SkillsPage() {
                   background:   covered ? "rgba(0,229,176,0.07)" : "var(--card-2)",
                   color:        covered ? "var(--accent)" : "var(--text-3)",
                 }}>
-                  {covered ? "✓ " : ""}{type}
+                  {covered ? "OK " : ""}{type}
                 </span>
               );
             })}

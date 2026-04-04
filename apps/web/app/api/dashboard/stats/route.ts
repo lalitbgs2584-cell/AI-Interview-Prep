@@ -19,7 +19,7 @@ export async function GET() {
         const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
         const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
 
-        // ─ Get all interviews for this user
+        // " Get all interviews for this user
         const allInterviews = await prisma.interview.findMany({
             where: { userId },
             include: {
@@ -45,13 +45,13 @@ export async function GET() {
             orderBy: { createdAt: "desc" },
         });
 
-        // ─ Get user skills
+        // " Get user skills
         const userSkills = await prisma.userSkill.findMany({
             where: { userId },
             include: { skill: true },
         });
 
-        // ─ Get current user for streak
+        // " Get current user for streak
         const user = await prisma.user.findUnique({
             where: { id: userId },
             select: {
@@ -60,7 +60,7 @@ export async function GET() {
             },
         });
 
-        // ─ Calculate statistics
+        // " Calculate statistics
         const totalSessions = allInterviews.length;
 
         // Average score across all completed interviews

@@ -6,8 +6,10 @@ node_modules
 .pnp.js
 
 # Local env files
-.env
-.env.local
+**/.env
+**/.env.local
+**/.env.production
+**/.env.staging
 .env.docker
 .env.development.local
 .env.test.local
@@ -44,4 +46,4 @@ neo4j_data/
 qdrant_data/
 valkey_data/
 
-recordings/
+saved-recordings/

@@ -1,11 +1,12 @@
-"use client";
+﻿"use client";
 
 import { getSocket } from "@/ws-client-config/socket";
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { AnalysisModal } from "./AnalysisModal";
 
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// "" Types """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 export interface ResumeInsights {
   experienceLevel: number;
@@ -21,14 +22,14 @@ export interface ResumeData {
   insights:       ResumeInsights | null;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// "" Helpers """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 export const EXPERIENCE_LABELS: Record<number, string> = {
   0: "Fresher",
-  1: "Junior · 0–2 years",
-  2: "Mid-level · 2–4 years",
-  3: "Senior · 4–8 years",
-  4: "Lead / Principal · 8+ years",
+  1: "Junior - 0-2 years",
+  2: "Mid-level - 2-4 years",
+  3: "Senior - 4-8 years",
+  4: "Lead / Principal - 8+ years",
 };
 
 export function atsLabel(score: number) {
@@ -51,11 +52,11 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// ── Analysis Modal ────────────────────────────────────────────────────────────
+// "" Analysis Modal """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 
 
-// ── Styles ───────────────────────────────────────────────────────────────────
+// "" Styles """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 const spinnerStyle: React.CSSProperties = {
   width:          14,
@@ -85,12 +86,16 @@ const successBannerStyle: React.CSSProperties = {
   border:       "1px solid rgba(226,168,75,0.25)",
 };
 
-// ── Component ────────────────────────────────────────────────────────────────
+// "" Component """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 type UploadStatus     = "idle" | "uploading" | "done" | "error";
 type ProcessingStatus = "idle" | "processing" | "ready" | "error";
 
-export default function ResumePage() {
+interface ResumePageProps {
+  userId: string;
+}
+
+export default function ResumePage({ userId }: ResumePageProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [file,              setFile]             = useState<File | null>(null);
@@ -105,13 +110,13 @@ export default function ResumePage() {
   const [showAnalysisModal, setShowAnalysisModal] = useState(false);
   const [toastMsg,          setToastMsg]          = useState<string | null>(null);
 
-  // ── Toast helper ──────────────────────────────────────────────────────────
+  // "" Toast helper """"""""""""""""""""""""""""""""""""""""""""""""""""""""""
   function toast(msg: string) {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(null), 3000);
   }
 
-  // ── Revoke blob URL on unmount ────────────────────────────────────────────
+  // "" Revoke blob URL on unmount """"""""""""""""""""""""""""""""""""""""""""
   useEffect(() => {
     return () => {
       if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
@@ -119,7 +124,7 @@ export default function ResumePage() {
   }, [previewUrl]);
 
 
-// ✅ On mount ONLY - no dependency
+// ... On mount ONLY - no dependency
 useEffect(() => {
   (async () => {
     try {
@@ -133,7 +138,7 @@ useEffect(() => {
       if (!data.resumeUploaded) return; 
       console.log("Resume uploaded is true");
       const resumeUrl = data.resumeUrl.split("uploads/")[1]
-      // ✅ Remove http check - direct CloudFront
+      // ... Remove http check - direct CloudFront
       const fullUrl = `https://d13lry3aagw513.cloudfront.net/${resumeUrl}`;
       console.log("PDF URL:", fullUrl);
 
@@ -161,12 +166,15 @@ useEffect(() => {
       console.error("Error loading resume:", err);
     }
   })();
-}, []);  // ✅ EMPTY DEPENDENCY - runs ONCE on mount
+}, []);  // ... EMPTY DEPENDENCY - runs ONCE on mount
 
 
-  // ── WebSocket: processing result ──────────────────────────────────────────
+  // "" WebSocket: processing result """"""""""""""""""""""""""""""""""""""""""
   useEffect(() => {
   const socket = getSocket();
+  if (userId) {
+    socket.emit("user:join", { userId });
+  }
 
   socket.on(
     "resume_processed",
@@ -175,7 +183,7 @@ useEffect(() => {
         setInsights(data.insights);
         setProcessingStatus("ready");
       } else if (data.status === "success") {
-        // Insights not in socket payload — re-fetch from DB to get them
+        // Insights not in socket payload " re-fetch from DB to get them
         setFetchResume((v) => !v);
       } else {
         setProcessingStatus("error");
@@ -183,10 +191,28 @@ useEffect(() => {
     }
   );
 
-  return () => { socket.off("resume_processed"); };
-}, []);
+  socket.on("job_failed", (data: { message?: string; scope?: string }) => {
+    if (data?.scope === "resume_processing") {
+      toast(data.message || "Resume processing failed. Please re-upload your file.");
+      setProcessingStatus("error");
+    }
+  });
 
-  // ── File helpers ──────────────────────────────────────────────────────────
+  socket.on("budget_exceeded", (data: { scope?: string; message?: string }) => {
+    if (data?.scope === "resume") {
+      toast(data.message || "Daily interview limit reached. Resets at midnight.");
+      setProcessingStatus("error");
+    }
+  });
+
+  return () => {
+    socket.off("resume_processed");
+    socket.off("job_failed");
+    socket.off("budget_exceeded");
+  };
+}, [userId]);
+
+  // "" File helpers """"""""""""""""""""""""""""""""""""""""""""""""""""""""""
   function handleFile(f: File | null) {
     if (!f) return;
     if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
@@ -214,7 +240,7 @@ useEffect(() => {
     handleFile(e.dataTransfer.files?.[0] ?? null);
   }
 
-  // ── Upload flow ───────────────────────────────────────────────────────────
+  // "" Upload flow """""""""""""""""""""""""""""""""""""""""""""""""""""""""""
   async function handleUpload() {
     if (!file) return;
     setUploadStatus("uploading");
@@ -264,7 +290,7 @@ useEffect(() => {
     }
   }
 
-  // ── Derived ───────────────────────────────────────────────────────────────
+  // "" Derived """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
   const isUploading  = uploadStatus === "uploading";
   const isProcessing = processingStatus === "processing";
 
@@ -277,7 +303,7 @@ useEffect(() => {
         },
         {
           label: "ATS Score",
-          val:   `${insights.ATSSCORE} / 100 — ${atsLabel(insights.ATSSCORE)}`,
+          val:   `${insights.ATSSCORE} / 100 " ${atsLabel(insights.ATSSCORE)}`,
           dot:   "dot-accent",
         },
       ]
@@ -288,11 +314,89 @@ useEffect(() => {
     priority: i === 0 ? "high" : i === 1 ? "medium" : "low",
   })) ?? [];
 
+  const atsBoostPlan = insights
+    ? [
+        ...(insights.ATSSCORE < 85
+          ? [{
+              title: "Add measurable impact",
+              detail: "Quantify outcomes with metrics (%, $, time saved, scale, users).",
+              priority: "high",
+            }]
+          : []),
+        ...(insights.keySkills.length < 8
+          ? [{
+              title: "Expand keyword coverage",
+              detail: "Add 6-12 role-specific skills and tools that match target job listings.",
+              priority: "high",
+            }]
+          : []),
+        ...(insights.strongDomains.length < 2
+          ? [{
+              title: "Clarify your domain focus",
+              detail: "Highlight 1-2 core domains in your summary and top projects.",
+              priority: "medium",
+            }]
+          : []),
+        ...(insights.weakAreas.some((w) => /project/i.test(w))
+          ? [{
+              title: "Strengthen projects section",
+              detail: "Add 2-3 projects with scope, tools, and business impact.",
+              priority: "high",
+            }]
+          : []),
+        ...(insights.weakAreas.some((w) => /cert|course/i.test(w))
+          ? [{
+              title: "Add certifications or coursework",
+              detail: "List 1-3 relevant credentials that align with the role.",
+              priority: "medium",
+            }]
+          : []),
+        {
+          title: "Use ATS-friendly formatting",
+          detail: "Keep headings simple, avoid tables/graphics, and use standard section titles.",
+          priority: "low",
+        },
+      ]
+    : [];
+
+  const sectionHints = insights
+    ? (() => {
+        const hints: { label: string; tip: string }[] = [];
+        const weakText = insights.weakAreas.join(" ").toLowerCase();
+        const add = (label: string, tip: string) => {
+          if (!hints.some((h) => h.label === label)) hints.push({ label, tip });
+        };
+
+        if (/summary|headline|objective/.test(weakText)) {
+          add("Professional Summary", "Add a 2-3 line summary tailored to the role.");
+        }
+        if (/project/.test(weakText)) {
+          add("Projects", "Show impact, tools, and outcomes.");
+        }
+        if (/skills/.test(weakText)) {
+          add("Skills", "Include hard skills + tools that match job posts.");
+        }
+        if (/experience/.test(weakText)) {
+          add("Experience", "Lead with impact + measurable results.");
+        }
+        if (/cert|course/.test(weakText)) {
+          add("Certifications", "Add relevant certs or coursework.");
+        }
+        if (/education/.test(weakText)) {
+          add("Education", "List degree, school, and graduation year.");
+        }
+
+        return hints;
+      })()
+    : [];
+
+  const keywordFocus = insights?.keySkills ?? [];
+
   function priorityClass(p: string) {
     return p === "high" ? "tag-rose" : p === "medium" ? "tag-amber" : "tag-gold";
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // "" Render """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
   return (
     <>
       <style>{`
@@ -322,7 +426,10 @@ useEffect(() => {
           <div className="dash-greeting">Resume <em>Builder</em></div>
           <div className="dash-date">Upload your resume to get AI-tailored interview sessions</div>
         </div>
-        
+        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+          <Link href="/resume" className="resume-action-btn" style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>Saved ATS resumes</Link>
+          <Link href="/resume/builder" className="resume-action-btn primary" style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>Create ATS resume</Link>
+        </div>
       </div>
 
       {/* Upload panel */}
@@ -363,11 +470,11 @@ useEffect(() => {
 
             {/* File info */}
             <div className="resume-file-card">
-              <span className="resume-file-icon">📋</span>
+              <span className="resume-file-icon">"</span>
               <div>
                 <div className="resume-file-name">{file.name}</div>
                 <div className="resume-file-size">
-                  {file.size > 0 ? `${formatBytes(file.size)} · ` : ""}
+                  {file.size > 0 ? `${formatBytes(file.size)} - ` : ""}
                 PDF
                 </div>
               </div>
@@ -418,7 +525,7 @@ useEffect(() => {
                   <div style={{ fontFamily: "var(--ff-mono)", fontSize: "0.68rem", color: "var(--muted)" }}>
                     {processingStatus === "processing" ? "AI is analyzing your resume..."
                       : processingStatus === "ready"   ? "AI analysis is ready below"
-                      : processingStatus === "error"   ? "Analysis failed — you can still continue"
+                      : processingStatus === "error"   ? "Analysis failed - you can still continue"
                       : "AI analysis is ready below"}
                   </div>
                 </div>
@@ -438,9 +545,9 @@ useEffect(() => {
                 <div className="panel-title">AI Resume Insights</div>
                 <div className="panel-sub">Parsed and analyzed</div>
               </div>
-              {processingStatus === "processing" && <span className="tag tag-amber">⏳ Analyzing...</span>}
-              {processingStatus === "ready"      && <span className="tag tag-accent">✅ AI Powered</span>}
-              {processingStatus === "error"      && <span className="tag tag-rose">❌ Analysis failed</span>}
+              {processingStatus === "processing" && <span className="tag tag-amber"> Analyzing...</span>}
+              {processingStatus === "ready"      && <span className="tag tag-accent">... AI Powered</span>}
+              {processingStatus === "error"      && <span className="tag tag-rose"> Analysis failed</span>}
             </div>
 
             {/* Skeleton */}
@@ -470,7 +577,7 @@ useEffect(() => {
             {/* Error state */}
             {processingStatus === "error" && (
               <div style={{ padding: "1.25rem", borderRadius: "var(--r-lg)", background: "rgba(247,106,106,0.06)", border: "1px solid rgba(247,106,106,0.2)", display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <span style={{ fontSize: "1.25rem" }}>⚠️</span>
+                <span style={{ fontSize: "1.25rem" }}> </span>
                 <div>
                   <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "var(--rose)", marginBottom: "0.2rem" }}>Analysis failed</div>
                   <div style={{ fontSize: "0.78rem", color: "var(--text-3)" }}>We couldn&apos;t analyze your resume. You can still continue or try re-uploading.</div>
@@ -498,6 +605,82 @@ useEffect(() => {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {processingStatus === "ready" && insights && (
+            <div className="panel">
+              <div className="panel-header">
+                <div>
+                  <div className="panel-title">ATS Boost Plan</div>
+                  <div className="panel-sub">What to add next to raise your score</div>
+                </div>
+                <span className="tag tag-accent">Target 85+</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "1rem" }}>
+                <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-md)", padding: "0.85rem", background: "var(--bg2)" }}>
+                  <div style={{ fontSize: "0.7rem", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                    Current ATS score
+                  </div>
+                  <div style={{ fontSize: "1.6rem", fontWeight: 800, color: atsColor(insights.ATSSCORE), marginTop: "0.35rem" }}>
+                    {insights.ATSSCORE} / 100
+                  </div>
+                  <div style={{ marginTop: "0.6rem", height: 8, background: "var(--bg)", borderRadius: 999, overflow: "hidden" }}>
+                    <div style={{ width: `${Math.min(100, insights.ATSSCORE)}%`, height: "100%", background: "var(--accent)", borderRadius: 999 }} />
+                  </div>
+                  <div style={{ fontSize: "0.68rem", color: "var(--muted)", marginTop: "0.5rem" }}>
+                    {atsLabel(insights.ATSSCORE)} " boost by {Math.max(0, 85 - insights.ATSSCORE)} to reach target
+                  </div>
+                </div>
+
+                <div style={{ border: "1px solid var(--border)", borderRadius: "var(--r-md)", padding: "0.85rem", background: "var(--bg2)" }}>
+                  <div style={{ fontSize: "0.7rem", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.5rem" }}>
+                    Add / strengthen
+                  </div>
+                  {sectionHints.length === 0 ? (
+                    <div style={{ fontSize: "0.78rem", color: "var(--text-3)" }}>
+                      Your resume sections look balanced. Focus on strengthening impact and keywords.
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                      {sectionHints.map((section) => (
+                        <div key={section.label}>
+                          <div style={{ fontSize: "0.8rem", fontWeight: 600 }}>{section.label}</div>
+                          <div style={{ fontSize: "0.72rem", color: "var(--muted)" }}>{section.tip}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {atsBoostPlan.length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem", marginTop: "1rem" }}>
+                  {atsBoostPlan.map((item, i) => (
+                    <div key={`${item.title}-${i}`} style={{ border: "1px solid var(--border)", borderRadius: "var(--r-md)", padding: "0.75rem 0.9rem", background: "var(--bg2)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.35rem" }}>
+                        <span className={`tag ${priorityClass(item.priority)}`}>{item.priority}</span>
+                        <span style={{ fontSize: "0.9rem", fontWeight: 600 }}>{item.title}</span>
+                      </div>
+                      <div style={{ fontSize: "0.78rem", color: "var(--text-2)", lineHeight: 1.6 }}>{item.detail}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {keywordFocus.length > 0 && (
+                <div style={{ marginTop: "1rem" }}>
+                  <div style={{ fontSize: "0.7rem", color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "0.5rem" }}>
+                    Keyword focus
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                    {keywordFocus.slice(0, 16).map((skill) => (
+                      <span key={skill} className="tag tag-accent">{skill}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -537,3 +720,5 @@ useEffect(() => {
     </>
   );
 }
+
+

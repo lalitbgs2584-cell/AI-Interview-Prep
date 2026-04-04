@@ -9,7 +9,7 @@ export async function GET(req: NextRequest) {
             headers: await headers(),
         });
 
-        // 1️⃣ If not authenticated
+        // 1 If not authenticated
         if (!session?.user) {
             return NextResponse.json(
                 { message: "Unauthorized" },
@@ -17,10 +17,10 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        // 2️⃣ Fetch user skills
+        // 2 Fetch user skills
         const userSkills = await prisma.userSkill.findMany({
             where: {
-                userId: session.user.id, // ✅ no stringify
+                userId: session.user.id, // ... no stringify
             },
             include: {
                 skill: true, // optional but useful
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
         });
 
         console.log(userSkills)
-        // 3️⃣ Return response
+        // 3 Return response
         return NextResponse.json({
             success: true,
             data: userSkills,

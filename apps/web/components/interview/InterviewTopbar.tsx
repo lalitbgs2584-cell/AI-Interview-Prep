@@ -20,6 +20,8 @@ import { useTimer } from "@/hooks/useTimer";
 import Link from "next/link";
 
 interface InterviewTopbarProps {
+  interviewType?: string | null;
+  interviewTitle?: string | null;
   isFullscreen: boolean;
   aiSpeaking: boolean;
   fsWarningCount: number;
@@ -33,6 +35,8 @@ interface InterviewTopbarProps {
 }
 
 export default function InterviewTopbar({
+  interviewType,
+  interviewTitle,
   isFullscreen,
   aiSpeaking,
   fsWarningCount,
@@ -45,6 +49,13 @@ export default function InterviewTopbar({
   onEndSession,
 }: InterviewTopbarProps) {
   const { display: timerDisplay } = useTimer(true); // Pass running state from parent
+  const typeLabel = interviewType
+    ? interviewType
+        .replace(/_/g, " ")
+        .toLowerCase()
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+    : "Interview";
+  const titleLabel = interviewTitle?.trim() || "Session";
 
   return (
     <header className="interview-topbar">
@@ -55,8 +66,8 @@ export default function InterviewTopbar({
         </Link>
         <div className="topbar-divider" />
         <div className="topbar-session-info">
-          <span className="tag tag-accent">System Design</span>
-          <span className="topbar-title">URL Shortener</span>
+          <span className="tag tag-accent">{typeLabel}</span>
+          <span className="topbar-title">{titleLabel}</span>
         </div>
       </div>
 
@@ -115,7 +126,7 @@ export default function InterviewTopbar({
           onClick={onEndSession}
           disabled={isEnding}
         >
-          {isEnding ? "Ending…" : "End Session"}
+          {isEnding ? "Ending" : "End Session"}
         </button>
       </div>
     </header>

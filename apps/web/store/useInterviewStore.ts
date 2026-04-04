@@ -16,10 +16,13 @@ interface Message {
 
 interface InterviewStore {
   interviewId: string | null;
+  interviewTitle: string | null;
+  interviewType: string | null;
   currentQuestion: Question | null;
   messages: Message[];
 
   setInterviewId: (id: string) => void;
+  setInterviewMeta: (title: string | null, type: string | null) => void;
   setCurrentQuestion: (q: Question) => void;
   addMessage: (m: Message) => void;
   clearCurrentQuestion: () => void;
@@ -28,12 +31,22 @@ interface InterviewStore {
 
 export const useInterviewStore = create<InterviewStore>((set) => ({
   interviewId: null,
+  interviewTitle: null,
+  interviewType: null,
   currentQuestion: null,
   messages: [],
 
   setInterviewId: (id) => set({ interviewId: id }),
+  setInterviewMeta: (title, type) => set({ interviewTitle: title, interviewType: type }),
   setCurrentQuestion: (q) => set({ currentQuestion: q }),
   addMessage: (m) => set((state) => ({ messages: [...state.messages, m] })),
   clearCurrentQuestion: () => set({ currentQuestion: null }),
-  reset: () => set({ interviewId: null, currentQuestion: null, messages: [] }),
+  reset: () =>
+    set({
+      interviewId: null,
+      interviewTitle: null,
+      interviewType: null,
+      currentQuestion: null,
+      messages: [],
+    }),
 }));

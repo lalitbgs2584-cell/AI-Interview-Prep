@@ -32,6 +32,10 @@ interface Message {
 interface ChatPanelProps {
   messages: Message[];
   aiSpeaking: boolean;
+  collapsed: boolean;
+  notice?: string | null;
+  onToggleCollapse: () => void;
+  onDismissNotice?: () => void;
   input: string;
   onInputChange: (value: string) => void;
   onSendMessage: () => void;
@@ -42,25 +46,113 @@ interface ChatPanelProps {
 export default function ChatPanel({
   messages,
   aiSpeaking,
+  collapsed,
+  notice,
+  onToggleCollapse,
+  onDismissNotice,
   input,
   onInputChange,
   onSendMessage,
   onKeyDown,
   chatEndRef,
 }: ChatPanelProps) {
+  if (collapsed) {
+    return (
+      <aside className="chat-panel chat-panel-collapsed" aria-label="Collapsed transcript panel">
+        <button
+          type="button"
+          className="chat-collapse-rail"
+          onClick={onToggleCollapse}
+          aria-label="Expand transcript panel"
+          title="Expand transcript"
+        >
+          <span className="chat-collapse-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M9 6l6 6-6 6"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+          <span className="chat-collapse-label">Transcript</span>
+          <span className="chat-collapse-count">{messages.length}</span>
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="chat-panel">
       {/* Header */}
       <div className="chat-header">
         <div className="chat-header-left">
-          <span className="chat-icon">◎</span>
+          <span className="chat-icon">-</span>
           <span className="chat-title">Transcript</span>
         </div>
-        <span className="chat-count">{messages.length} msgs</span>
+        <div className="chat-header-actions">
+          <span className="chat-count">{messages.length} msgs</span>
+          <button
+            type="button"
+            className="chat-collapse-btn"
+            onClick={onToggleCollapse}
+            aria-label="Collapse transcript panel"
+            title="Collapse transcript"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M15 6l-6 6 6 6"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Messages Container */}
       <div className="chat-messages">
+        {notice && (
+          <div
+            style={{
+              marginBottom: "0.75rem",
+              padding: "0.85rem 1rem",
+              borderRadius: "14px",
+              border: "1px solid rgba(245, 158, 11, 0.35)",
+              background: "rgba(245, 158, 11, 0.12)",
+              color: "rgba(255,255,255,0.92)",
+              fontSize: "0.85rem",
+              lineHeight: 1.5,
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: "0.75rem",
+            }}
+          >
+            <span>{notice}</span>
+            {onDismissNotice && (
+              <button
+                type="button"
+                onClick={onDismissNotice}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "inherit",
+                  cursor: "pointer",
+                  fontSize: "0.85rem",
+                }}
+                aria-label="Dismiss notice"
+              >
+                -
+              </button>
+            )}
+          </div>
+        )}
+
         {messages.map((m, i) => (
           <div
             key={m.id}
@@ -108,7 +200,7 @@ export default function ChatPanel({
         <textarea
           className="chat-input"
           rows={1}
-          placeholder="Type a response or note…"
+          placeholder="Type a response or note"
           value={input}
           onChange={(e) => onInputChange(e.target.value)}
           onKeyDown={onKeyDown}

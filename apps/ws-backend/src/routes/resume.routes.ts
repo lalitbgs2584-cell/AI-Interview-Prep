@@ -1,13 +1,17 @@
 import { Router } from "express";
 import { resumeController } from "../controllers/resume.controllers.js";
 import { authMiddleware } from "../middlewares/error.middlewares.js";
+import {
+  interviewStartRateLimiter,
+  resumeUploadRateLimiter,
+} from "../middlewares/ratelimit.middleware.js";
 
 const router: Router = Router();
 
-router.post("/process-resume",          authMiddleware, resumeController.processResume);
-router.post("/start-interview",         authMiddleware, resumeController.startInterview);
+router.post("/process-resume",          authMiddleware, resumeUploadRateLimiter, resumeController.processResume);
+router.post("/start-interview",         authMiddleware, interviewStartRateLimiter, resumeController.startInterview);
 
-// ⚠️  /interview/history MUST be registered BEFORE /interview/:id/results
+//    /interview/history MUST be registered BEFORE /interview/:id/results
 //     so Express doesn't treat "history" as the :id param.
 router.get("/interview/history",        authMiddleware, resumeController.interviewHistory);
 

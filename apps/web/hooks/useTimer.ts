@@ -46,7 +46,7 @@ export function useTimer(running: boolean): UseTimerReturn {
 
   /**
    * Format seconds as MM:SS
-   * Example: 323 seconds → "05:23"
+   * Example: 323 seconds ' "05:23"
    */
   const minutes = Math.floor(seconds / 60);
   const secs = seconds % 60;

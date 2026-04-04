@@ -1,95 +1,75 @@
-/**
- * ============================================================================
- * INTERVIEW PAGE - Main Component
- * ============================================================================
- * 
- * This is the simplified entry point for the interview page.
- * All complex logic has been extracted into specialized modules.
- * 
- * Responsibilities:
- *  - Page orchestration
- *  - Main layout structure
- *  - Coordinate between different feature modules
- * 
- * ============================================================================
- */
-
-"use client";
+﻿"use client";
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
-
-// Feature modules
-
 import { useSpeechToText } from "@/hooks/useSpeechHook";
 import { useInterviewStore } from "@/store/useInterviewStore";
 
-// Components
-
-
-
-// Utilities
-
-import "../style.css";
+import "./style.css";
 import { useFullscreenManager } from "@/hooks/useFullscreenManager";
 import { useTabSwitchDetection } from "@/hooks/useTabSwitchDetection";
 import { useFaceDetectionManager } from "@/hooks/useFaceDetectionManager";
 import { useIdentityVerificationManager } from "@/hooks/useIdentityVerificationManager";
 import { useMediaManager } from "@/hooks/useMediaManager";
+import { useRecordingManager } from "@/hooks/useRecordingManager";
 import { AnswerAnalyticsBuilder } from "@/components/interview/anwerAnalyticsBuilder";
 import { InterviewSocketManager } from "@/components/interview/InterviewSocketManager";
 import InterviewTopbar from "@/components/interview/InterviewTopbar";
-import VideoArea from "@/components/interview/videoArea";
 import ChatPanel from "@/components/interview/chatPanel";
+import ZoomVideoArea from "@/components/interview/ZoomVideoArea";
 import { FullscreenGate } from "@/modals/FullscreenGate";
 import { FullscreenWarningModal } from "@/modals/FullscreenWarningModal";
 import { FaceViolationModal } from "@/modals/FaceViolationModal";
 import { IdentityMismatchModal } from "@/modals/IdentityMismatchModal";
 import { TabSwitchWarningModal } from "@/modals/TabSwitchWarningModal";
+import { AudioMetricsCollector } from "@/lib/audioAnalytics";
 
 type EndReason = "completed" | "user_ended" | "fullscreen" | "tab_switch" | "face_violation" | "identity_mismatch";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 export default function InterviewPage() {
   const router = useRouter();
   const params = useParams();
   const interviewId = params.id as string;
 
-  // ── State: UI Controls ──────────────────────────────────────────────
   const [input, setInput] = useState("");
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [aiSpeaking, setAiSpeaking] = useState(false);
   const [sessionRunning, setSessionRunning] = useState(true);
   const [isEnding, setIsEnding] = useState(false);
-
-  // ── State: Gates & Modals ──────────────────────────────────────────
   const [showGate, setShowGate] = useState(true);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  const [isChatCollapsed, setIsChatCollapsed] = useState(false);
+  const [screenShareStream, setScreenShareStream] = useState<MediaStream | null>(null);
+  const [isScreenSharePending, setIsScreenSharePending] = useState(false);
+  const [mediaReady, setMediaReady] = useState(false);
 
-  // ── Refs: Control ──────────────────────────────────────────────────
   const endLockRef = useRef(false);
   const endReasonRef = useRef<EndReason>("user_ended");
-  const endSessionRef = useRef<(fromBackend?: boolean, reason?: EndReason) => void>(() => { });
+  const endSessionRef = useRef<(fromBackend?: boolean, reason?: EndReason) => void>(() => {});
 
-  // ── Refs: Media ────────────────────────────────────────────────────
   const chatEndRef = useRef<HTMLDivElement>(null) as React.RefObject<HTMLDivElement>;
   const userVideoRef = useRef<HTMLVideoElement>(null) as React.RefObject<HTMLVideoElement>;
+  const screenVideoRef = useRef<HTMLVideoElement>(null) as React.RefObject<HTMLVideoElement>;
   const aiAudioRef = useRef<HTMLAudioElement>(null) as React.RefObject<HTMLAudioElement>;
+  const audioCollectorRef = useRef<AudioMetricsCollector>(new AudioMetricsCollector());
+  const speechStartTimeRef = useRef<number>(0);
 
-  // ── Store ──────────────────────────────────────────────────────────
-  const { addMessage, messages, reset } = useInterviewStore();
+  const { addMessage, messages, reset, interviewTitle, interviewType, setInterviewMeta } = useInterviewStore();
 
-  // ── Feature Managers ───────────────────────────────────────────────
   const {
     isFullscreen,
     fsWarningCount,
     showFsWarning,
     handleGateEnter,
     handleReenterFullscreen,
+    suppressFsExitRef,
   } = useFullscreenManager({
     showGate,
     isEnding,
     sessionRunning,
+    fullscreenExempt: Boolean(screenShareStream) || isScreenSharePending,
     onTerminate: (reason) => endSessionRef.current(false, reason),
   });
 
@@ -117,7 +97,6 @@ export default function InterviewPage() {
   });
 
   const {
-    identityStatus,
     identityMismatchCount,
     showIdentityModal,
     identityCountdown,
@@ -139,7 +118,12 @@ export default function InterviewPage() {
     stopMicMeter,
   } = useMediaManager();
 
-  // ── Utility Managers ───────────────────────────────────────────────
+  const { startRecording, stopRecording } = useRecordingManager({
+    userStreamRef,
+    aiAudioRef,
+    interviewId,
+    enabled: !showGate && sessionRunning && !isEnding,
+  });
 
   const analyticsBuilder = useMemo(
     () => new AnswerAnalyticsBuilder(micSampleBufferRef),
@@ -151,7 +135,6 @@ export default function InterviewPage() {
     [interviewId]
   );
 
-  // ── Speech Recognition ─────────────────────────────────────────────
   const {
     transcript,
     isListening,
@@ -162,6 +145,13 @@ export default function InterviewPage() {
     silenceThresholdMs: 3000,
     onSpeechStart: useCallback(() => {
       analyticsBuilder.recordFirstSpeech();
+      // Start timing and audio sampling for the current answer.
+      speechStartTimeRef.current = Date.now();
+      if (userStreamRef.current) {
+        audioCollectorRef.current.reset();
+        audioCollectorRef.current.start(userStreamRef.current);
+      }
+
       if (aiSpeaking) {
         if (aiAudioRef.current) {
           aiAudioRef.current.pause();
@@ -170,26 +160,28 @@ export default function InterviewPage() {
         setAiSpeaking(false);
         socketManager.emitInterruption();
       }
-    }, [aiSpeaking, analyticsBuilder, socketManager]),
+    }, [aiSpeaking, analyticsBuilder, socketManager, userStreamRef]),
     onFinalMessage: useCallback((text: string) => {
       submitAnswer(text);
     }, []),
   });
 
-  // ── Abort listening ref ────────────────────────────────────────────
-  const abortListeningRef = useRef<() => void>(() => { });
+  const abortListeningRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     abortListeningRef.current = abortListening;
     return () => abortListeningRef.current?.();
   }, [abortListening]);
 
-  // ── Update transcript input ────────────────────────────────────────
   useEffect(() => {
     if (transcript) setInput(transcript);
   }, [transcript]);
 
-  // ── Auto-start/stop listening based on state ───────────────────────
+  useEffect(() => {
+    if (!mediaReady || showGate || isEnding || !sessionRunning) return;
+    startRecording();
+  }, [isEnding, mediaReady, sessionRunning, showGate, startRecording]);
+
   useEffect(() => {
     if (showGate) return;
     if (micOn && !aiSpeaking) {
@@ -202,10 +194,6 @@ export default function InterviewPage() {
     };
   }, [micOn, aiSpeaking, showGate, startListening, stopListening]);
 
-  /**
-   * Submit user's answer to the backend.
-   * Builds analytics, stores in chat history, emits to socket.
-   */
   const submitAnswer = useCallback(
     (text: string) => {
       const trimmed = text.trim();
@@ -216,26 +204,22 @@ export default function InterviewPage() {
         minute: "2-digit",
       });
 
-      // Add to chat history
       addMessage({ id: Date.now(), role: "user", text: trimmed, time: now });
       setInput("");
+      // Stop sampling before building the answer analytics payload.
+      const audioMetrics = audioCollectorRef.current.stop();
+      const durationMs = Date.now() - speechStartTimeRef.current;
+      const analytics = analyticsBuilder.build(trimmed, audioMetrics, durationMs);
 
-      // Build analytics from audio samples
-      const analytics = analyticsBuilder.build(trimmed);
-
-      // Emit to backend
       socketManager.submitAnswer(trimmed, analytics);
 
-      // Reset for next question
       analyticsBuilder.reset();
+      audioCollectorRef.current.reset();
       setAiSpeaking(true);
     },
     [addMessage, analyticsBuilder, socketManager]
   );
 
-  /**
-   * Play AI-generated speech and add to chat.
-   */
   const playAIAudio = useCallback(
     async (text: string) => {
       if (!aiAudioRef.current || showGate) return;
@@ -267,10 +251,71 @@ export default function InterviewPage() {
     [showGate]
   );
 
-  /**
-   * End the interview session.
-   * Cleans up all resources, stops recording, sends analytics.
-   */
+  const stopScreenShare = useCallback(() => {
+    setScreenShareStream((current) => {
+      current?.getTracks().forEach((track) => track.stop());
+      return null;
+    });
+  }, []);
+
+  const restoreFullscreenAfterShare = useCallback(async () => {
+    if (showGate || isEnding || !sessionRunning || document.fullscreenElement) {
+      return;
+    }
+
+    try {
+      await document.documentElement.requestFullscreen?.();
+      setSessionNotice(null);
+    } catch {
+      setSessionNotice("Screen sharing ended. Return to fullscreen to continue.");
+    }
+  }, [isEnding, sessionRunning, showGate]);
+
+  const toggleScreenShare = useCallback(async () => {
+    if (screenShareStream) {
+      stopScreenShare();
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setSessionNotice("Screen sharing is not supported in this browser.");
+      return;
+    }
+
+    try {
+      suppressFsExitRef.current = true;
+      setIsScreenSharePending(true);
+
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          displaySurface: "browser",
+        } as MediaTrackConstraints,
+        audio: false,
+      });
+
+      const [videoTrack] = displayStream.getVideoTracks();
+      videoTrack?.addEventListener(
+        "ended",
+        () => {
+          setScreenShareStream(null);
+          void restoreFullscreenAfterShare();
+        },
+        { once: true },
+      );
+
+      setScreenShareStream(displayStream);
+      setSessionNotice(null);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "NotAllowedError") {
+        setSessionNotice("Screen sharing was canceled before it started.");
+      } else {
+        console.error("[screen share]", err);
+        setSessionNotice("Screen sharing could not start. Please try again.");
+      }
+    } finally {
+      setIsScreenSharePending(false);
+    }
+  }, [restoreFullscreenAfterShare, screenShareStream, stopScreenShare, suppressFsExitRef]);
   const endSession = useCallback(
     async (fromBackend = false, reason: EndReason = "user_ended") => {
       if (endLockRef.current) return;
@@ -282,30 +327,57 @@ export default function InterviewPage() {
       setSessionRunning(false);
       setAiSpeaking(false);
 
-      // Stop all feature managers
       stopMicMeter();
+      stopScreenShare();
+      stopRecording();
+      audioCollectorRef.current.stop();
 
-      // Cleanup audio
       if (aiAudioRef.current) {
         aiAudioRef.current.pause();
         aiAudioRef.current.currentTime = 0;
       }
 
-      // Exit fullscreen if needed
       if (document.fullscreenElement) {
         try {
           await document.exitFullscreen();
-        } catch {
-          /* ignore */
-        }
+        } catch { /* ignore */ }
       }
 
-      // Emit end event to backend
       if (!fromBackend) {
         socketManager.emitSessionEnd(endReasonRef.current);
       }
 
-      // Save activity
+      const persistInterview = async (attempt = 1): Promise<void> => {
+        try {
+          const res = await fetch(`${API_BASE}/api/interview/${interviewId}/complete`, {
+            method: "POST",
+            credentials: "include",
+          });
+
+          if (res.ok) return;
+
+          if (res.status === 404 && attempt < 5) {
+            setTimeout(() => { void persistInterview(attempt + 1); }, 1500);
+            return;
+          }
+
+          let detail = `HTTP ${res.status}`;
+          try {
+            const json = await res.json();
+            detail = json?.error ?? json?.message ?? detail;
+          } catch { /* ignore */ }
+          console.warn("[interview] storeNeon failed:", detail);
+        } catch (err) {
+          if (attempt < 5) {
+            setTimeout(() => { void persistInterview(attempt + 1); }, 1500);
+            return;
+          }
+          console.warn("[interview] storeNeon error:", err);
+        }
+      };
+
+      void persistInterview();
+
       try {
         await fetch("/api/activity/complete", {
           method: "POST",
@@ -324,11 +396,8 @@ export default function InterviewPage() {
 
       reset();
 
-      // Redirect to feedback
       setTimeout(() => {
-        router.push(
-          `/feedback/${interviewId}/?reason=${endReasonRef.current}`
-        );
+        router.push(`/feedback/${interviewId}/?reason=${endReasonRef.current}`);
       }, 2000);
     },
     [
@@ -337,10 +406,12 @@ export default function InterviewPage() {
       reset,
       isEnding,
       stopMicMeter,
+      stopScreenShare,
       socketManager,
       tabSwitchCount,
       fsWarningCount,
       identityMismatchCount,
+      stopRecording,
     ]
   );
 
@@ -348,27 +419,13 @@ export default function InterviewPage() {
     endSessionRef.current = endSession;
   }, [endSession]);
 
-  /**
-   * Handle incoming questions from backend.
-   */
   const handleQuestion = useCallback(
-    (data: {
-      question: string;
-      index: number;
-      difficulty: string;
-      time?: number;
-    }) => {
+    (data: { question: string; index: number; difficulty: string; time?: number }) => {
       if (!data?.question) return;
 
       const now = data.time
-        ? new Date(data.time).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-        : new Date().toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
+        ? new Date(data.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        : new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
       analyticsBuilder.recordQuestion(data.time ?? Date.now());
       addMessage({ id: Date.now(), role: "ai", text: data.question, time: now });
@@ -377,74 +434,94 @@ export default function InterviewPage() {
     [addMessage, playAIAudio, analyticsBuilder]
   );
 
-  /**
-   * Setup socket listeners for backend events.
-   */
   useEffect(() => {
     if (showGate) return;
 
     const unsubscribe = socketManager.setupListeners({
       onQuestion: handleQuestion,
       onIntentReply: (reply: string) => {
-        const now = new Date().toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        });
+        const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         addMessage({ id: Date.now(), role: "ai", text: reply, time: now });
         playAIAudio(reply);
+      },
+      onBudgetExceeded: ({ message }) => {
+        setSessionNotice(message || "Daily interview limit reached. Resets at midnight.");
+        setAiSpeaking(false);
+      },
+      onJobFailed: ({ message }) => {
+        setSessionNotice(message || "A background job failed. Please try again.");
       },
       onComplete: () => endSessionRef.current(true, "completed"),
     });
 
     socketManager.joinInterview();
-
     return () => unsubscribe();
   }, [showGate, handleQuestion, addMessage, playAIAudio]);
 
-  /**
-   * Initialize media (mic, camera) and start recording.
-   */
+  // Restore interview meta on refresh (sessionStorage)
+  useEffect(() => {
+    if (!interviewId || typeof window === "undefined") return;
+    const key = `interview_meta:${interviewId}`;
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { title?: string | null; type?: string | null };
+      const nextTitle = parsed?.title ?? null;
+      const nextType = parsed?.type ?? null;
+      if ((nextTitle || nextType) && (!interviewTitle || !interviewType)) {
+        setInterviewMeta(nextTitle, nextType);
+      }
+    } catch {
+      // ignore malformed cache
+    }
+  }, [interviewId, interviewTitle, interviewType, setInterviewMeta]);
+
+  // Keep meta cached during the session
+  useEffect(() => {
+    if (!interviewId || typeof window === "undefined") return;
+    if (!interviewTitle && !interviewType) return;
+    const key = `interview_meta:${interviewId}`;
+    const payload = { title: interviewTitle ?? null, type: interviewType ?? null };
+    sessionStorage.setItem(key, JSON.stringify(payload));
+  }, [interviewId, interviewTitle, interviewType]);
+
   useEffect(() => {
     navigator.mediaDevices
       .getUserMedia({ video: { facingMode: "user" }, audio: true })
       .then((stream) => {
         userStreamRef.current = stream;
+        setMediaReady(true);
         startMicMeter(stream);
+        // Start detailed answer analytics only when speech begins.
       })
       .catch((err) => console.error("[media]", err));
 
     return () => {
       try {
         userStreamRef.current?.getTracks().forEach((t) => t.stop());
-      } catch {
-        /* ignore */
-      }
+      } catch { /* ignore */ }
+      stopScreenShare();
       stopMicMeter();
+      audioCollectorRef.current.stop();
     };
-  }, [startMicMeter, stopMicMeter]);
+  }, [startMicMeter, stopMicMeter, stopRecording, stopScreenShare]);
 
-  /**
-   * Attach user video stream to video element.
-   */
   useEffect(() => {
     if (userVideoRef.current && userStreamRef.current) {
       userVideoRef.current.srcObject = userStreamRef.current;
     }
   }, [micPermission, camOn]);
 
-  /**
-   * Auto-scroll chat to bottom on new messages.
-   */
+  useEffect(() => {
+    if (!screenVideoRef.current) return;
+    screenVideoRef.current.srcObject = screenShareStream;
+  }, [screenShareStream]);
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  /**
-   * Send message handler (manual submit).
-   */
-  const sendMessage = () => {
-    submitAnswer(input);
-  };
+  const sendMessage = () => { submitAnswer(input); };
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -453,35 +530,22 @@ export default function InterviewPage() {
     }
   };
 
-  // ─────────────────────────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────────────────────────
-
   return (
     <>
       <div className="noise" />
 
-      {/* ── MODALS ────────────────────────────────────────────────── */}
       {showGate && (
         <FullscreenGate
           onEnter={async () => {
-            console.log("Clicked Start");
-            try {
-              await handleGateEnter();
-            } catch (e) {
-              console.error("Fullscreen error:", e);
-            }
-
-            setShowGate(false); // 🚨 THIS WAS MISSING
+            try { await handleGateEnter(); }
+            catch (e) { console.error("Fullscreen error:", e); }
+            setShowGate(false);
           }}
         />
       )}
 
       {!showGate && showFsWarning && (
-        <FullscreenWarningModal
-          count={fsWarningCount}
-          onReenter={handleReenterFullscreen}
-        />
+        <FullscreenWarningModal count={fsWarningCount} onReenter={handleReenterFullscreen} />
       )}
 
       {showFaceModal && (
@@ -502,15 +566,13 @@ export default function InterviewPage() {
       )}
 
       {showTabWarning && (
-        <TabSwitchWarningModal
-          count={tabSwitchCount}
-          onDismiss={handleDismissTabWarning}
-        />
+        <TabSwitchWarningModal count={tabSwitchCount} onDismiss={handleDismissTabWarning} />
       )}
 
-      {/* ── MAIN PAGE ─────────────────────────────────────────────── */}
       <div className="interview-root">
         <InterviewTopbar
+          interviewTitle={interviewTitle}
+          interviewType={interviewType}
           isFullscreen={isFullscreen}
           aiSpeaking={aiSpeaking}
           fsWarningCount={fsWarningCount}
@@ -520,32 +582,31 @@ export default function InterviewPage() {
           faceCount={faceCount}
           isEnding={isEnding}
           onToggleFullscreen={() => {
-            if (isFullscreen) {
-              document.exitFullscreen().catch(() => { });
-            } else {
-              document.documentElement.requestFullscreen?.();
-            }
+            if (isFullscreen) { document.exitFullscreen().catch(() => {}); }
+            else { document.documentElement.requestFullscreen?.(); }
           }}
           onEndSession={() => endSession(false, "user_ended")}
         />
 
-        <div className="interview-body">
-          <VideoArea
+        <div className={`interview-body${isChatCollapsed ? " chat-collapsed" : ""}`}>
+          <ZoomVideoArea
             userVideoRef={userVideoRef}
+            screenVideoRef={screenVideoRef}
             aiAudioRef={aiAudioRef}
             camOn={camOn}
             micOn={micOn}
             aiSpeaking={aiSpeaking}
             isListening={isListening}
+            isScreenSharing={Boolean(screenShareStream)}
+            isScreenSharePending={isScreenSharePending}
+            isChatCollapsed={isChatCollapsed}
             camPermission={camPermission}
-            micPermission={micPermission}
             faceStatus={faceStatus}
-            modelsReady={modelsReady}
-            showFaceBanner={
-              camOn && camPermission && modelsReady && faceStatus !== "ok"
-            }
+            showFaceBanner={camOn && camPermission && modelsReady && faceStatus !== "ok"}
             onMicToggle={() => setMicOn((p) => !p)}
             onCamToggle={() => setCamOn((v) => !v)}
+            onToggleScreenShare={() => void toggleScreenShare()}
+            onToggleChatPanel={() => setIsChatCollapsed((prev) => !prev)}
             onEndSession={() => endSession(false, "user_ended")}
             isEnding={isEnding}
           />
@@ -553,6 +614,10 @@ export default function InterviewPage() {
           <ChatPanel
             messages={messages}
             aiSpeaking={aiSpeaking}
+            collapsed={isChatCollapsed}
+            notice={sessionNotice}
+            onToggleCollapse={() => setIsChatCollapsed((prev) => !prev)}
+            onDismissNotice={() => setSessionNotice(null)}
             input={input}
             onInputChange={setInput}
             onSendMessage={sendMessage}
@@ -564,3 +629,9 @@ export default function InterviewPage() {
     </>
   );
 }
+
+
+
+
+
+

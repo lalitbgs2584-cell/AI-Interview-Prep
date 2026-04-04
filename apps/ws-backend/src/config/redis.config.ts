@@ -3,10 +3,17 @@ import dotenv from "dotenv";
 dotenv.config();
 import {Redis} from "ioredis";
 
-const redisUrl = process.env.VALKEY_URL || "redis://localhost:6379";
+export const redisUrl = process.env.VALKEY_URL || "redis://localhost:6379";
 
-export const redisClient = new Redis(
-  redisUrl
-);
+function getRedisOptions() {
+  return redisUrl.startsWith("rediss://")
+    ? { tls: { rejectUnauthorized: false } }
+    : {};
+}
 
-export const subscriber = new Redis(redisUrl); // locked to subscribe only
+export function createRedisClient() {
+  return new Redis(redisUrl, getRedisOptions());
+}
+
+export const redisClient = createRedisClient();
+export const subscriber = createRedisClient(); // locked to subscribe only

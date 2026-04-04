@@ -25,8 +25,8 @@
   --accent-2:   #ff8162;
   --accent-3:   #ff3010;
 
-  /* Semantic palette — no green/teal */
-  --positive: #e2a84b;   /* gold — replaces teal for success/high scores */
+  /* Semantic palette " no green/teal */
+  --positive: #e2a84b;   /* gold " replaces teal for success/high scores */
   --amber:    #f5a623;   /* warning / medium scores */
   --rose:     #ff4d6d;   /* error / low scores */
   --sky:      #38bdf8;   /* info / tags */
@@ -417,7 +417,7 @@ body {
   animation: countUp 0.5s var(--ease-snap) both;
 }
 
-.score-high   { color: var(--positive); }  /* gold   — was teal  */
+.score-high   { color: var(--positive); }  /* gold   " was teal  */
 .score-medium { color: var(--amber); }
 .score-low    { color: var(--rose); }
 
@@ -613,7 +613,7 @@ body {
   transition: color var(--dur-base) var(--ease-out);
 }
 .progress-step.active { color: var(--text); }
-.progress-step.done   { color: var(--positive); }  /* gold — was teal */
+.progress-step.done   { color: var(--positive); }  /* gold " was teal */
 
 .progress-step-dot {
   width: 8px; height: 8px; margin-top: 6px;

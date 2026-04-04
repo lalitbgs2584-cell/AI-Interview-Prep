@@ -1,12 +1,12 @@
-"use client";
+﻿"use client";
 import { authClient } from "@repo/auth/client";
 import { redirect } from "next/navigation";
 import React, { useEffect, useState } from "react";
 import CustomSessionModal from "./dashboard-components/pages/CustomSessionModal";
 
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 // Types
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 interface DashboardStats {
   totalSessions: number;
@@ -44,9 +44,9 @@ interface QuickStartItem {
   type: "TECHNICAL" | "HR" | "SYSTEM_DESIGN" | "BEHAVIORAL";
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 // Utility Functions
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 function scoreClass(status: string) {
   return status === "high" ? "score-high" : status === "medium" ? "score-medium" : "score-low";
@@ -105,9 +105,9 @@ function getTypeLabel(type: string): string {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 // Components
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 export function SessionRow({ s }: { s: SessionData }) {
   return (
@@ -121,11 +121,11 @@ export function SessionRow({ s }: { s: SessionData }) {
               {getTypeLabel(s.type)}
             </span>
             <span className="session-date">{formatDate(s.date)}</span>
-            <span className="session-duration">· {formatDuration(s.duration)}</span>
+            <span className="session-duration">- {formatDuration(s.duration)}</span>
           </div>
         </div>
       </div>
-      <button className="session-replay-btn">Review →</button>
+      <button className="session-replay-btn">Review '</button>
     </div>
   );
 }
@@ -144,14 +144,14 @@ function LoadingSkeleton() {
 function ErrorMessage({ message }: { message: string }) {
   return (
     <div className="error-message">
-      <span>⚠️ {message}</span>
+      <span>  {message}</span>
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 // Main Component
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 export default function OverviewPage({
   userName,
@@ -166,7 +166,7 @@ export default function OverviewPage({
   const [activeTab, setActiveTab] = useState<"overview" | "sessions" | "skills">("overview");
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
-  // ─ State for dynamic data
+  // " State for dynamic data
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentSessions, setRecentSessions] = useState<SessionData[]>([]);
   const [skillData, setSkillData] = useState<SkillData[]>([]);
@@ -181,11 +181,98 @@ export default function OverviewPage({
     day: "numeric",
   });
 
-  // ─────────────────────────────────────────────────────────────────────────
+  const DASH_CACHE_KEY = "dashboard_overview_cache_v1";
+  const DASH_CACHE_TTL_MS = 5 * 60 * 1000;
+
+  // """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
   // Fetch Dashboard Data
-  // ─────────────────────────────────────────────────────────────────────────
+  // """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
   useEffect(() => {
+    const quickStartItems: QuickStartItem[] = [
+      {
+        id: "sd",
+        icon: "",
+        label: "System Design",
+        desc: "Architecture & scalability",
+        tag: "Popular",
+        tagClass: "tag-accent",
+        type: "SYSTEM_DESIGN",
+      },
+      {
+        id: "dsa",
+        icon: "-",
+        label: "Technical",
+        desc: "Algorithms & data structures",
+        tag: "Daily",
+        tagClass: "tag-gold",
+        type: "TECHNICAL",
+      },
+      {
+        id: "beh",
+        icon: "-",
+        label: "Behavioral",
+        desc: "STAR method coaching",
+        tag: "Suggested",
+        tagClass: "tag-violet",
+        type: "BEHAVIORAL",
+      },
+      {
+        id: "hr",
+        icon: "-",
+        label: "HR Round",
+        desc: "Communication & culture fit",
+        tag: "Essential",
+        tagClass: "tag-rose",
+        type: "HR",
+      },
+    ];
+
+    const readCache = () => {
+      if (typeof window === "undefined") return null;
+      try {
+        const raw = sessionStorage.getItem(DASH_CACHE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as {
+          ts: number;
+          stats: DashboardStats | null;
+          recentSessions: SessionData[];
+          skillData: SkillData[];
+        };
+        if (!parsed?.ts) return null;
+        if (Date.now() - parsed.ts > DASH_CACHE_TTL_MS) return null;
+        return parsed;
+      } catch {
+        return null;
+      }
+    };
+
+    const writeCache = (payload: {
+      stats: DashboardStats | null;
+      recentSessions: SessionData[];
+      skillData: SkillData[];
+    }) => {
+      if (typeof window === "undefined") return;
+      try {
+        sessionStorage.setItem(
+          DASH_CACHE_KEY,
+          JSON.stringify({ ts: Date.now(), ...payload })
+        );
+      } catch {
+        // ignore storage errors
+      }
+    };
+
+    const cached = readCache();
+    if (cached) {
+      setStats(cached.stats);
+      setRecentSessions(cached.recentSessions || []);
+      setSkillData(cached.skillData || []);
+      setQuickStart(quickStartItems);
+      setIsLoading(false);
+      return;
+    }
+
     const fetchDashboardData = async () => {
       try {
         setIsLoading(true);
@@ -209,47 +296,13 @@ export default function OverviewPage({
         setStats(statsData);
         setRecentSessions(sessionsData.interviews || []);
         setSkillData(skillsData.skills || []);
-
-        // Generate quick start items dynamically
-        const quickStartItems: QuickStartItem[] = [
-          {
-            id: "sd",
-            icon: "⬡",
-            label: "System Design",
-            desc: "Architecture & scalability",
-            tag: "Popular",
-            tagClass: "tag-accent",
-            type: "SYSTEM_DESIGN",
-          },
-          {
-            id: "dsa",
-            icon: "◈",
-            label: "Technical",
-            desc: "Algorithms & data structures",
-            tag: "Daily",
-            tagClass: "tag-gold",
-            type: "TECHNICAL",
-          },
-          {
-            id: "beh",
-            icon: "◎",
-            label: "Behavioral",
-            desc: "STAR method coaching",
-            tag: "Suggested",
-            tagClass: "tag-violet",
-            type: "BEHAVIORAL",
-          },
-          {
-            id: "hr",
-            icon: "⬕",
-            label: "HR Round",
-            desc: "Communication & culture fit",
-            tag: "Essential",
-            tagClass: "tag-rose",
-            type: "HR",
-          },
-        ];
         setQuickStart(quickStartItems);
+
+        writeCache({
+          stats: statsData,
+          recentSessions: sessionsData.interviews || [],
+          skillData: skillsData.skills || [],
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : "An error occurred");
         console.error("Dashboard fetch error:", err);
@@ -261,9 +314,9 @@ export default function OverviewPage({
     fetchDashboardData();
   }, []);
 
-  // ─────────────────────────────────────────────────────────────────────────
+  // """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
   // Handle Logout
-  // ─────────────────────────────────────────────────────────────────────────
+  // """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -271,9 +324,9 @@ export default function OverviewPage({
     redirect("/login");
   };
 
-  // ─────────────────────────────────────────────────────────────────────────
+  // """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
   // Render
-  // ─────────────────────────────────────────────────────────────────────────
+  // """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
   if (isLoading) {
     return <LoadingSkeleton />;
@@ -304,7 +357,7 @@ export default function OverviewPage({
     {
       label: "Current Streak",
       value: streak.toString(),
-      unit: "days 🔥",
+      unit: "days",
       dot: "dot-accent",
       delta: "Keep it up!",
     },
@@ -312,7 +365,7 @@ export default function OverviewPage({
 
   return (
     <>
-      {/* ── Top bar ── */}
+      {/* "" Top bar "" */}
       <div className="dash-topbar">
         <div>
           <div className="dash-greeting">
@@ -320,7 +373,7 @@ export default function OverviewPage({
             <em>{userName}</em>
           </div>
           <div className="dash-date">
-            {dateStr} · {streak}-day streak 🔥
+            {dateStr} - {streak}-day streak "
           </div>
         </div>
         <div className="topbar-actions">
@@ -329,15 +382,15 @@ export default function OverviewPage({
             disabled={isLoggingOut}
             className="btn-new-session bg-red-600! hover:bg-red-700!"
           >
-            {isLoggingOut ? "Logging out…" : "Logout"}
+            {isLoggingOut ? "Logging out" : "Logout"}
           </button>
         </div>
       </div>
 
-      {/* ── Error State ── */}
+      {/* "" Error State "" */}
       {error && <ErrorMessage message={error} />}
 
-      {/* ── Stat cards ── */}
+      {/* "" Stat cards "" */}
       <div className="stats-grid">
         {displayStats.map((s, i) => (
           <div key={s.label} className={`dash-stat-card anim-${i}`}>
@@ -354,7 +407,7 @@ export default function OverviewPage({
         ))}
       </div>
 
-      {/* ── Tabs ── */}
+      {/* "" Tabs "" */}
       <div className="dash-tabs">
         {(["overview", "sessions", "skills"] as const).map((t) => (
           <button
@@ -367,7 +420,7 @@ export default function OverviewPage({
         ))}
       </div>
 
-      {/* ── Overview ── */}
+      {/* "" Overview "" */}
       {activeTab === "overview" && (
         <div className="tab-content">
           <div className="overview-grid">
@@ -430,7 +483,7 @@ export default function OverviewPage({
         </div>
       )}
 
-      {/* ── Sessions ── */}
+      {/* "" Sessions "" */}
       {activeTab === "sessions" && (
         <div className="tab-content">
           <div className="panel">
@@ -451,7 +504,7 @@ export default function OverviewPage({
         </div>
       )}
 
-      {/* ── Skills ── */}
+      {/* "" Skills "" */}
       {activeTab === "skills" && (
         <div className="tab-content">
           <div className="panel">
@@ -469,10 +522,10 @@ export default function OverviewPage({
                   const statusTag = st === "high" ? "tag-gold" : st === "medium" ? "tag-amber" : "tag-rose";
                   const hint =
                     st === "low"
-                      ? "🎯 Recommended: 2 sessions this week"
+                      ? "Recommended: 2 sessions this week"
                       : st === "medium"
-                        ? "📈 Keep practicing to reach Strong"
-                        : "✅ Great performance — maintain with 1 session/week";
+                        ? "Keep practicing to reach Strong"
+                        : "Great performance - maintain with 1 session/week";
 
                   return (
                     <div key={s.skill} className="skill-row" style={{ animationDelay: `${i * 0.07}s` }}>

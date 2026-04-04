@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ============================================================================
  * MODAL COMPONENTS
  * ============================================================================
@@ -77,8 +77,8 @@ export function FaceStatusBanner({ status }: FaceStatusBannerProps) {
         )}
       </svg>
       {isMultiple
-        ? "Multiple people visible — adjust camera"
-        : "No face detected — please stay in frame"}
+        ? "Multiple people visible - adjust camera"
+        : "No face detected - please stay in frame"}
     </div>
   );
 }

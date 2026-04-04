@@ -32,10 +32,10 @@ export async function GET(request: Request) {
         const user = await prisma.user.findUnique({
             where: { id: userId },
             include: {
-                // ── Basic user data ──
+                // "" Basic user data ""
                 // name, email, role, etc. are already on User model
 
-                // ── Interviews with all nested data ──
+                // "" Interviews with all nested data ""
                 interviews: {
                     include: {
                         questions: {
@@ -70,7 +70,7 @@ export async function GET(request: Request) {
                     orderBy: { createdAt: "desc" },
                 },
 
-                // ── Skills data ──
+                // "" Skills data ""
                 skills: {
                     include: {
                         skill: {
@@ -82,7 +82,7 @@ export async function GET(request: Request) {
                     },
                 },
 
-                // ── Resume data ──
+                // "" Resume data ""
                 resumes: {
                     include: {
                         insights: {

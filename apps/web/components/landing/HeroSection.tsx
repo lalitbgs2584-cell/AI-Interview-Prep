@@ -37,12 +37,12 @@ export function HeroSection() {
       </h1>
 
       <p className="hero-anim-2" style={{ fontSize: "clamp(1rem, 2vw, 1.2rem)", color: "var(--muted)", maxWidth: 560, marginBottom: "3rem", lineHeight: 1.7 }}>
-        Real-time video mock interviews powered by AI — personalized to your resume, scored on vocabulary, confidence, and technical depth.
+        Real-time video mock interviews powered by AI " personalized to your resume, scored on vocabulary, confidence, and technical depth.
       </p>
 
       <div className="hero-anim-3" style={{ display: "flex", gap: "1rem", flexWrap: "wrap", justifyContent: "center" }}>
         <BtnPrimary onClick={handleClick} loading={loading}>
-          {loading ? "Starting Interview" : "Start Free Interview →"}
+          {loading ? "Starting Interview" : "Start Free Interview '"}
         </BtnPrimary>
         <a href="#how" className="btn-ghost-hover" style={{ background: "transparent", color: "var(--text)", padding: "0.85rem 2.2rem", borderRadius: 8, fontSize: "1rem", fontWeight: 600, fontFamily: "var(--ff-body)", border: "1px solid var(--border)", cursor: "pointer", textDecoration: "none", display: "inline-block", transition: "all 0.2s" }}>
           See how it works

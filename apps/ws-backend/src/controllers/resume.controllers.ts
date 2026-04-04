@@ -1,23 +1,10 @@
 import { Response } from "express";
+import { randomUUID } from "crypto";
 import { redisClient } from "../config/redis.config.js";
 import { AuthenticatedRequest } from "../types/auth-request.js";
 import { prisma } from "@repo/db/prisma-db";
-
-// ─────────────────────────────────────────────────────────────────────────────
-// UNIFIED RESPONSE SHAPE
-//
-// Single interface satisfying both consumers of GET /api/interview/:id/results:
-//
-//   1. FeedbackPage   — reads snake_case fields:
-//        overall_score, skill_scores, question_scores, weaknesses, role,
-//        interview_type, candidate_name, date_iso, duration_seconds,
-//        recommendation, tips, history, what_went_right, what_went_wrong,
-//        gap_analysis
-//
-//   2. HistoryPage drawer — reads camelCase fields:
-//        overallScore, technicalScore, communicationScore, problemSolvingScore,
-//        confidenceScore, improvements, questions
-// ─────────────────────────────────────────────────────────────────────────────
+import { writeCheckpoint } from "../utils/checkpoint.js";
+import { logEvent } from "../utils/eventLogger.js";
 
 interface WentPoint {
   point: string;
@@ -47,26 +34,19 @@ interface SummaryAnalytics {
 }
 
 interface UnifiedInterviewResult {
-  // ── Metadata ──────────────────────────────────────────────────────────────
   role: string;
   interview_type: string;
   candidate_name: string;
   date_iso: string;
   duration_seconds: number;
   recommendation: string;
-
-  // ── Narrative ─────────────────────────────────────────────────────────────
   summary: string;
-  strengths: string[];      // backward-compat — mirrors what_went_right points
-  weaknesses: string[];     // backward-compat — mirrors what_went_wrong points (FeedbackPage)
-  improvements: string[];   // HistoryPage drawer alias of weaknesses
+  strengths: string[];
+  weaknesses: string[];
+  improvements: string[];
   tips: string[];
-
-  // ── Rich feedback (from Python finalize node) ─────────────────────────────
-  what_went_right: WentPoint[];   // [{ point, tag }]
-  what_went_wrong: WentPoint[];   // [{ point, tag }]
-
-  // ── Gap analysis (deterministic, from finalize node) ──────────────────────
+  what_went_right: WentPoint[];
+  what_went_wrong: WentPoint[];
   gap_analysis: GapAnalysis;
   score_pillars: ScorePillars;
   analytics: SummaryAnalytics;
@@ -74,28 +54,23 @@ interface UnifiedInterviewResult {
   pressure_handling_score: number;
   conciseness_score: number;
   coaching_priorities: string[];
-
-  // ── Scores — snake_case (FeedbackPage) ────────────────────────────────────
   overall_score: number;
   skill_scores: Record<string, number>;
-
-  // ── Scores — camelCase (HistoryPage drawer) ───────────────────────────────
   overallScore: number;
   technicalScore: number;
   communicationScore: number;
   problemSolvingScore: number;
   confidenceScore: number;
-
-  // ── Questions — FeedbackPage format ──────────────────────────────────────
-  // score here is 0-100 (finalize node already multiplies by 10)
   question_scores: {
     index: number;
-    score: number;         // 0-100
+    score: number;
     difficulty: string;
     question: string;
     user_answer?: string;
-    verdict: string;       // primary — from LLM narration
-    feedback: string;      // alias of verdict for backward-compat
+    expected_answer?: Record<string, unknown>;
+    reference_answer?: string;
+    verdict: string;
+    feedback: string;
     missing_concepts: string[];
     strengths: string[];
     weaknesses: string[];
@@ -104,12 +79,12 @@ interface UnifiedInterviewResult {
     analytics?: Record<string, any>;
     score_pillars?: Partial<ScorePillars>;
   }[];
-
-  // ── Questions — HistoryPage drawer format ─────────────────────────────────
   questions: {
     order: number | null;
     content: string;
     answer?: string | null;
+    expected_answer?: Record<string, unknown> | null;
+    reference_answer?: string | null;
     difficulty: string | null;
     score: number | null;
     dimensions?: Record<string, number> | null;
@@ -123,15 +98,12 @@ interface UnifiedInterviewResult {
       improvements: string | null;
     } | null;
   }[];
-
-  // ── Session history (FeedbackPage score-history chart) ────────────────────
   history: {
     interview_id: string;
     score: number;
     role: string;
     date_iso: string;
   }[];
-
   final_improvement_plan?: {
     top_strengths: string[];
     top_weaknesses: string[];
@@ -139,32 +111,39 @@ interface UnifiedInterviewResult {
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// NORMALISER — Python finalize node Redis payload → UnifiedInterviewResult
-//
-// The Python finalize node stores snake_case keys.
-// question_scores from finalize already have score 0-100 (raw_score * 10).
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+// NORMALISER " Redis path (Python finalize node output)
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 function normalizeRedisSummary(
   raw: any,
   history: UnifiedInterviewResult["history"],
   replaySteps: Array<{
     index: number;
     user_answer?: string;
+    expected_answer?: Record<string, unknown>;
+    reference_answer?: string;
     dimensions?: Record<string, number>;
     timestamp?: number;
   }> = [],
 ): UnifiedInterviewResult {
   const skillScores: Record<string, number> = raw.skill_scores ?? {};
 
-  // question_scores from finalize node: score is already 0-100
   const questionScoresRaw: any[] = raw.question_scores ?? [];
   const replayByIndex = new Map(
     replaySteps.map((step) => [
       Number(step.index ?? 0),
       {
         user_answer: String(step.user_answer ?? ""),
-        dimensions: step.dimensions && typeof step.dimensions === "object" ? step.dimensions : {},
+        expected_answer:
+          step.expected_answer && typeof step.expected_answer === "object"
+            ? step.expected_answer
+            : {},
+        reference_answer: String(step.reference_answer ?? ""),
+        // "" FIX: read dimensions from replay step directly ""
+        dimensions:
+          step.dimensions && typeof step.dimensions === "object"
+            ? step.dimensions
+            : {},
         timestamp: Number(step.timestamp ?? 0),
       },
     ]),
@@ -172,17 +151,20 @@ function normalizeRedisSummary(
 
   const overall = raw.overall_score ?? 0;
 
-  // Derive camelCase score fields from skill_scores (populated by finalize node)
   const technicalScore =
-    skillScores["Technical Depth"] ?? skillScores["Technical"] ?? skillScores["Correctness"] ?? 0;
+    skillScores["Technical Depth"] ??
+    skillScores["Technical"] ??
+    skillScores["Correctness"] ??
+    0;
   const communicationScore =
     skillScores["Communication"] ?? skillScores["Clarity"] ?? 0;
   const problemSolvingScore =
-    skillScores["Problem Solving"] ?? skillScores["Domain Knowledge"] ?? overall;
+    skillScores["Problem Solving"] ??
+    skillScores["Domain Knowledge"] ??
+    overall;
   const confidenceScore =
     skillScores["Confidence"] ?? skillScores["Self-Awareness"] ?? 0;
 
-  // what_went_right / what_went_wrong come as [{point, tag}] from finalize
   const whatWentRight: WentPoint[] = Array.isArray(raw.what_went_right)
     ? raw.what_went_right.map((w: any) => ({
       point: String(w.point ?? ""),
@@ -197,7 +179,6 @@ function normalizeRedisSummary(
     }))
     : [];
 
-  // Backward-compat flat arrays (also accept legacy flat string arrays)
   const strengths: string[] = Array.isArray(raw.strengths)
     ? raw.strengths.map(String)
     : whatWentRight.map((w) => w.point);
@@ -208,214 +189,280 @@ function normalizeRedisSummary(
 
   const tips: string[] = Array.isArray(raw.tips) ? raw.tips.map(String) : [];
 
-  // Gap analysis — fully deterministic from finalize node
   const rawGap = raw.gap_analysis ?? {};
   const gapAnalysis: GapAnalysis = {
-    repeated_gaps: Array.isArray(rawGap.repeated_gaps) ? rawGap.repeated_gaps : [],
+    repeated_gaps: Array.isArray(rawGap.repeated_gaps)
+      ? rawGap.repeated_gaps
+      : [],
     all_gaps: Array.isArray(rawGap.all_gaps) ? rawGap.all_gaps : [],
-    gap_frequency: rawGap.gap_frequency && typeof rawGap.gap_frequency === "object"
-      ? rawGap.gap_frequency
-      : {},
-    weak_dimensions: Array.isArray(rawGap.weak_dimensions) ? rawGap.weak_dimensions : [],
-    dim_averages: rawGap.dim_averages && typeof rawGap.dim_averages === "object"
-      ? rawGap.dim_averages
-      : {},
+    gap_frequency:
+      rawGap.gap_frequency && typeof rawGap.gap_frequency === "object"
+        ? rawGap.gap_frequency
+        : {},
+    weak_dimensions: Array.isArray(rawGap.weak_dimensions)
+      ? rawGap.weak_dimensions
+      : [],
+    dim_averages:
+      rawGap.dim_averages && typeof rawGap.dim_averages === "object"
+        ? rawGap.dim_averages
+        : {},
   };
+
+  // "" FIX: Redis path reads score_pillars and analytics directly from raw ""
   const scorePillars: ScorePillars = {
     content_score: Number(raw.score_pillars?.content_score ?? overall),
-    delivery_score: Number(raw.score_pillars?.delivery_score ?? communicationScore),
-    confidence_score: Number(raw.score_pillars?.confidence_score ?? confidenceScore),
-    communication_flow_score: Number(raw.score_pillars?.communication_flow_score ?? communicationScore),
+    delivery_score: Number(
+      raw.score_pillars?.delivery_score ?? communicationScore
+    ),
+    confidence_score: Number(
+      raw.score_pillars?.confidence_score ?? confidenceScore
+    ),
+    communication_flow_score: Number(
+      raw.score_pillars?.communication_flow_score ?? communicationScore
+    ),
   };
+
   const analytics: SummaryAnalytics = {
-    filler_summary: raw.analytics?.filler_summary && typeof raw.analytics.filler_summary === "object"
-      ? raw.analytics.filler_summary
-      : {},
-    flow_summary: raw.analytics?.flow_summary && typeof raw.analytics.flow_summary === "object"
-      ? raw.analytics.flow_summary
-      : {},
-    confidence_summary: raw.analytics?.confidence_summary && typeof raw.analytics.confidence_summary === "object"
-      ? raw.analytics.confidence_summary
-      : {},
+    filler_summary:
+      raw.analytics?.filler_summary &&
+        typeof raw.analytics.filler_summary === "object"
+        ? raw.analytics.filler_summary
+        : {},
+    flow_summary:
+      raw.analytics?.flow_summary &&
+        typeof raw.analytics.flow_summary === "object"
+        ? raw.analytics.flow_summary
+        : {},
+    confidence_summary:
+      raw.analytics?.confidence_summary &&
+        typeof raw.analytics.confidence_summary === "object"
+        ? raw.analytics.confidence_summary
+        : {},
     concept_coverage_trend: Array.isArray(raw.analytics?.concept_coverage_trend)
       ? raw.analytics.concept_coverage_trend
       : [],
   };
 
-  // Build FeedbackPage question_scores — finalize already outputs 0-100 scores
-  const question_scores: UnifiedInterviewResult["question_scores"] = questionScoresRaw.map(
-    (q: any) => {
+  const question_scores: UnifiedInterviewResult["question_scores"] =
+    questionScoresRaw.map((q: any) => {
+      const idx = Number(q.index ?? 0);
+      const replay = replayByIndex.get(idx);
       const verdict = String(q.verdict ?? q.feedback ?? "No feedback available");
+
+      // "" FIX: dimensions now comes from finalize question_scores directly ""
+      const dimensions: Record<string, number> =
+        q.dimensions && typeof q.dimensions === "object"
+          ? q.dimensions
+          : replay?.dimensions ?? {};
+
       return {
-<<<<<<< HEAD
-        index:            Number(q.index ?? 0),
-        score:            Number(q.score ?? 0),           // 0-100 from finalize
-        difficulty:       String(q.difficulty ?? "medium").toLowerCase(),
-        question:         String(q.question ?? ""),
-        user_answer:      replayByIndex.get(Number(q.index ?? 0))?.user_answer ?? String(q.user_answer ?? ""),
-        verdict,
-        feedback:         verdict,                         // alias
-        dimensions:       replayByIndex.get(Number(q.index ?? 0))?.dimensions ?? (q.dimensions && typeof q.dimensions === "object" ? q.dimensions : {}),
-        analytics:        q.analytics && typeof q.analytics === "object" ? q.analytics : {},
-        score_pillars:    q.score_pillars && typeof q.score_pillars === "object" ? q.score_pillars : {},
-        missing_concepts: Array.isArray(q.missing_concepts) ? q.missing_concepts.map(String) : [],
-        strengths:        Array.isArray(q.strengths) ? q.strengths.map(String) : [],
-        weaknesses:       Array.isArray(q.weaknesses) ? q.weaknesses.map(String) : [],
-        timestamp:        Number(replayByIndex.get(Number(q.index ?? 0))?.timestamp ?? q.timestamp ?? 0),
-=======
-        index: Number(q.index ?? 0),
-        score: Number(q.score ?? 0),           // 0-100 from finalize
+        index: idx,
+        score: Number(q.score ?? 0),
         difficulty: String(q.difficulty ?? "medium").toLowerCase(),
         question: String(q.question ?? ""),
+        user_answer: replay?.user_answer ?? String(q.user_answer ?? ""),
+        expected_answer:
+          q.expected_answer && typeof q.expected_answer === "object"
+            ? q.expected_answer
+            : replay?.expected_answer ?? {},
+        reference_answer:
+          String(q.reference_answer ?? "") ||
+          replay?.reference_answer ||
+          "",
         verdict,
-        feedback: verdict,                         // alias
-        missing_concepts: Array.isArray(q.missing_concepts) ? q.missing_concepts.map(String) : [],
+        feedback: verdict,
+        dimensions,
+        analytics:
+          q.analytics && typeof q.analytics === "object" ? q.analytics : {},
+        score_pillars:
+          q.score_pillars && typeof q.score_pillars === "object"
+            ? q.score_pillars
+            : {},
+        missing_concepts: Array.isArray(q.missing_concepts)
+          ? q.missing_concepts.map(String)
+          : [],
         strengths: Array.isArray(q.strengths) ? q.strengths.map(String) : [],
-        weaknesses: Array.isArray(q.weaknesses) ? q.weaknesses.map(String) : [],
-        timestamp: Number(q.timestamp ?? 0),
->>>>>>> upstream/main
+        weaknesses: Array.isArray(q.weaknesses)
+          ? q.weaknesses.map(String)
+          : [],
+        timestamp: Number(replay?.timestamp ?? q.timestamp ?? 0),
+      };
+    });
+
+  const questions: UnifiedInterviewResult["questions"] = questionScoresRaw.map(
+    (q: any) => {
+      const idx = Number(q.index ?? 0);
+      const replay = replayByIndex.get(idx);
+      const dimensions: Record<string, number> =
+        q.dimensions && typeof q.dimensions === "object"
+          ? q.dimensions
+          : replay?.dimensions ?? {};
+
+      return {
+        order: idx,
+        content: String(q.question ?? ""),
+        answer: replay?.user_answer ?? String(q.user_answer ?? ""),
+        expected_answer:
+          q.expected_answer && typeof q.expected_answer === "object"
+            ? q.expected_answer
+            : replay?.expected_answer ?? {},
+        reference_answer:
+          String(q.reference_answer ?? "") ||
+          replay?.reference_answer ||
+          "",
+        difficulty: q.difficulty ? String(q.difficulty).toUpperCase() : null,
+        score:
+          q.score !== undefined && q.score !== null ? Number(q.score) : null,
+        dimensions,
+        evaluation: {
+          overallScore:
+            q.score !== undefined && q.score !== null
+              ? Number(q.score)
+              : null,
+          clarity: Number(dimensions.clarity ?? 0) || null,
+          technical:
+            Number(dimensions.correctness ?? dimensions.depth ?? 0) || null,
+          confidence: Number(q.score_pillars?.confidence_score ?? 0) || null,
+          feedback: String(q.verdict ?? q.feedback ?? ""),
+          strengths:
+            Array.isArray(q.strengths) && q.strengths.length
+              ? q.strengths.join(" | ")
+              : null,
+          improvements:
+            Array.isArray(q.weaknesses) && q.weaknesses.length
+              ? q.weaknesses.join(" | ")
+              : null,
+        },
       };
     },
   );
 
-  // Build HistoryPage questions array from same source
-  const questions: UnifiedInterviewResult["questions"] = questionScoresRaw.map((q: any) => ({
-<<<<<<< HEAD
-    order:      Number(q.index ?? 0),
-    content:    String(q.question ?? ""),
-    answer:     replayByIndex.get(Number(q.index ?? 0))?.user_answer ?? String(q.user_answer ?? ""),
-    difficulty: q.difficulty ? String(q.difficulty).toUpperCase() : null,
-    score:      q.score !== undefined && q.score !== null ? Number(q.score) : null,
-    dimensions: replayByIndex.get(Number(q.index ?? 0))?.dimensions ?? (q.dimensions && typeof q.dimensions === "object" ? q.dimensions : {}),
-    evaluation: {
-      overallScore: q.score !== undefined && q.score !== null ? Number(q.score) : null,
-      clarity:      Number(replayByIndex.get(Number(q.index ?? 0))?.dimensions?.clarity ?? q.dimensions?.clarity ?? 0) || null,
-      technical:    Number(replayByIndex.get(Number(q.index ?? 0))?.dimensions?.correctness ?? q.dimensions?.correctness ?? q.dimensions?.depth ?? 0) || null,
-      confidence:   Number(q.score_pillars?.confidence_score ?? 0) || null,
-      feedback:     String(q.verdict ?? q.feedback ?? ""),
-      strengths:    Array.isArray(q.strengths) && q.strengths.length
-=======
-    order: Number(q.index ?? 0),
-    content: String(q.question ?? ""),
-    difficulty: q.difficulty ? String(q.difficulty).toUpperCase() : null,
-    score: q.score !== undefined && q.score !== null ? Number(q.score) : null,
-    evaluation: {
-      overallScore: q.score !== undefined && q.score !== null ? Number(q.score) : null,
-      clarity: null,
-      technical: null,
-      confidence: null,
-      feedback: String(q.verdict ?? q.feedback ?? ""),
-      strengths: Array.isArray(q.strengths) && q.strengths.length
->>>>>>> upstream/main
-        ? q.strengths.join(" | ")
-        : null,
-      improvements: Array.isArray(q.weaknesses) && q.weaknesses.length
-        ? q.weaknesses.join(" | ")
-        : null,
-    },
-  }));
-
   return {
-    // Metadata
     role: String(raw.role ?? "Interview"),
     interview_type: String(raw.interview_type ?? "technical"),
     candidate_name: String(raw.candidate_name ?? "Candidate"),
     date_iso: String(raw.date_iso ?? new Date().toISOString()),
     duration_seconds: Number(raw.duration_seconds ?? 0),
     recommendation: String(raw.recommendation ?? "Needs More Evaluation"),
-
-    // Narrative
     summary: String(raw.summary ?? "No summary available."),
     strengths,
     weaknesses,
     improvements: weaknesses,
     tips,
-
-    // Rich feedback
     what_went_right: whatWentRight,
     what_went_wrong: whatWentWrong,
-
-    // Gap analysis
     gap_analysis: gapAnalysis,
     score_pillars: scorePillars,
     analytics,
     recovery_score: Number(raw.recovery_score ?? 0),
     pressure_handling_score: Number(raw.pressure_handling_score ?? 0),
     conciseness_score: Number(raw.conciseness_score ?? 0),
-    coaching_priorities: Array.isArray(raw.coaching_priorities) ? raw.coaching_priorities.map(String) : [],
-
-    // Scores — snake_case
+    coaching_priorities: Array.isArray(raw.coaching_priorities)
+      ? raw.coaching_priorities.map(String)
+      : [],
     overall_score: overall,
     skill_scores: skillScores,
-
-    // Scores — camelCase
     overallScore: overall,
     technicalScore,
     communicationScore,
     problemSolvingScore,
     confidenceScore,
-
-    // Questions
     question_scores,
     questions,
-
-    // History
     history,
     final_improvement_plan: {
       top_strengths: strengths.slice(0, 3),
       top_weaknesses: weaknesses.slice(0, 3),
-      practice_next: Array.isArray(raw.coaching_priorities) ? raw.coaching_priorities.slice(0, 3).map(String) : [],
+      practice_next: Array.isArray(raw.coaching_priorities)
+        ? raw.coaching_priorities.slice(0, 3).map(String)
+        : [],
     },
   };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 // HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 function meanOf(nums: (number | null)[]): number {
   const valid = nums.filter((v): v is number => v !== null);
-  return valid.length ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length) : 0;
+  return valid.length
+    ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length)
+    : 0;
 }
 
 function splitPiped(val: string | null): string[] {
-  return val ? val.split("|").map((s) => s.trim()).filter(Boolean) : [];
+  return val
+    ? val
+      .split("|")
+      .map((s) => s.trim())
+      .filter(Boolean)
+    : [];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+// CONTROLLER
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 export const resumeController = {
 
-  // ── POST /api/process-resume ─────────────────────────────────────────────
+  // "" POST /api/process-resume """""""""""""""""""""""""""""""""""""""""""""
   processResume: async (req: AuthenticatedRequest, res: Response) => {
     try {
       const session = req.session;
-      if (!session?.user?.id) return res.status(401).json({ message: "Unauthorized" });
+      if (!session?.user?.id)
+        return res.status(401).json({ message: "Unauthorized" });
 
       const userId = session.user.id;
       const { fileId, S3fileName } = req.body;
+      const traceId = randomUUID();
+      const jobId = randomUUID();
 
       if (!fileId || !S3fileName)
-        return res.status(400).json({ message: "Missing fileId or S3fileName" });
+        return res
+          .status(400)
+          .json({ message: "Missing fileId or S3fileName" });
 
       const job = {
         type: "resume_processing",
-        payload: { user_id: userId, file_id: fileId, s3_file_name: S3fileName },
-        meta: { enqueuedAt: new Date() },
+        payload: {
+          user_id: userId,
+          file_id: fileId,
+          s3_file_name: S3fileName,
+          trace_id: traceId,
+        },
+        meta: {
+          jobId,
+          traceId,
+          queue: "jobs",
+          enqueuedAt: new Date().toISOString(),
+        },
       };
       await redisClient.rpush("jobs", JSON.stringify(job));
-      console.log("✅ Job pushed to queue");
-      return res.status(200).json({ message: "Job queued successfully" });
+      await redisClient.set(`resume:file:${fileId}:trace_id`, traceId, "EX", 60 * 60 * 24);
+      await logEvent({
+        traceId,
+        stage: "resume.queue",
+        eventType: "resume_processing_queued",
+        userId,
+        fileId,
+        payload: {
+          jobId,
+          s3FileName: S3fileName,
+        },
+      });
+      console.log("... Job pushed to queue");
+      return res.status(200).json({ message: "Job queued successfully", traceId, jobId });
     } catch (error) {
       console.error("Error processing resume:", error);
       return res.status(500).json({ message: "Failed to process resume" });
     }
   },
 
-  // ── GET /api/interview/history ────────────────────────────────────────────
-  // ⚠️  Must be registered BEFORE /interview/:id/results in the router.
+  // "" GET /api/interview/history """"""""""""""""""""""""""""""""""""""""""""
   interviewHistory: async (req: AuthenticatedRequest, res: Response) => {
     try {
       const session = req.session;
-      if (!session?.user?.id) return res.status(401).json({ message: "Unauthorized" });
+      if (!session?.user?.id)
+        return res.status(401).json({ message: "Unauthorized" });
 
       const userId = session.user.id;
 
@@ -423,8 +470,13 @@ export const resumeController = {
         where: { userId },
         orderBy: { createdAt: "desc" },
         select: {
-          id: true, title: true, type: true, status: true,
-          createdAt: true, completedAt: true, endReason: true,
+          id: true,
+          title: true,
+          type: true,
+          status: true,
+          createdAt: true,
+          completedAt: true,
+          endReason: true,
           questions: { select: { score: true } },
         },
       });
@@ -443,12 +495,18 @@ export const resumeController = {
       };
 
       const result = interviews.map((iv) => {
-        const validScores = iv.questions.map((q) => q.score).filter((s): s is number => s !== null);
+        const validScores = iv.questions
+          .map((q) => q.score)
+          .filter((s): s is number => s !== null);
         const score = validScores.length
-          ? Math.round(validScores.reduce((a, b) => a + b, 0) / validScores.length)
+          ? Math.round(
+            validScores.reduce((a, b) => a + b, 0) / validScores.length,
+          )
           : null;
         const duration = iv.completedAt
-          ? Math.floor((iv.completedAt.getTime() - iv.createdAt.getTime()) / 1000)
+          ? Math.floor(
+            (iv.completedAt.getTime() - iv.createdAt.getTime()) / 1000,
+          )
           : null;
         const normalizedStatus =
           iv.status === "CREATED" || iv.status === "IN_PROGRESS"
@@ -457,7 +515,7 @@ export const resumeController = {
               : iv.completedAt
                 ? "completed"
                 : "in_progress"
-            : STATUS_MAP[iv.status] ?? "in_progress";
+            : (STATUS_MAP[iv.status] ?? "in_progress");
         return {
           id: iv.id,
           title: iv.title,
@@ -476,51 +534,79 @@ export const resumeController = {
     }
   },
 
-  // ── GET /api/interview/:id/results ────────────────────────────────────────
-  // Returns UnifiedInterviewResult — satisfies both FeedbackPage and
-  // HistoryPage drawer with a single endpoint.
-  //
-  // Priority: 1️⃣ Redis (Python finalize summary) → 2️⃣ DB (InterviewSummary) → 3️⃣ DB fallback
+  // "" GET /api/interview/:id/results """"""""""""""""""""""""""""""""""""""""
+  // """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+  // UPDATED: resumeController.interviewFeedback
+  // - Enhanced to extract and return analytics from all three data sources
+  // - Redis path: analytics from finalize output
+  // - InterviewSummary path: analytics from responseAnalyticsMetrics + whyScoreNotHigher
+  // - Raw DB path: reconstructed analytics from evaluation data
+  // """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
   interviewFeedback: async (req: AuthenticatedRequest, res: Response) => {
-    const interviewId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
-    if (!interviewId) return res.status(400).json({ error: "Interview ID is required" });
+    const interviewId = Array.isArray(req.params.id)
+      ? req.params.id[0]
+      : req.params.id;
+    if (!interviewId)
+      return res.status(400).json({ error: "Interview ID is required" });
 
     const session = req.session;
-    if (!session?.user?.id) return res.status(401).json({ message: "Unauthorized" });
+    if (!session?.user?.id)
+      return res.status(401).json({ message: "Unauthorized" });
 
     const userId = session.user.id;
 
     try {
-      // ── Fetch session history from Redis ──────────────────────────────────
       let history: UnifiedInterviewResult["history"] = [];
       try {
-        const rawHistory = await redisClient.lrange(`user:${userId}:interview_scores`, 0, -1);
+        const rawHistory = await redisClient.lrange(
+          `user:${userId}:interview_scores`,
+          0,
+          -1,
+        );
         history = rawHistory.map((h: string) => JSON.parse(h));
       } catch {
         history = [];
       }
 
-      // ── 1️⃣ REDIS FIRST — Python finalize summary ─────────────────────────
-      const redisSummary = await redisClient.get(`interview:${interviewId}:summary`);
+      // "" 1 REDIS FIRST """""""""""""""""""""""""""""""""""""""""""""""""""
+      const redisSummary = await redisClient.get(
+        `interview:${interviewId}:summary`,
+      );
       if (redisSummary) {
         console.log(`[interviewFeedback] Redis hit for ${interviewId}`);
         const raw = JSON.parse(redisSummary);
         const replaySteps = await redisClient
           .lrange(`interview:${interviewId}:history`, 0, -1)
           .then((rows) =>
-            rows.map((row) => {
-              try {
-                return JSON.parse(row);
-              } catch {
-                return null;
-              }
-            }).filter(Boolean),
+            rows
+              .map((row) => {
+                try {
+                  return JSON.parse(row);
+                } catch {
+                  return null;
+                }
+              })
+              .filter(Boolean),
           );
-        return res.status(200).json(normalizeRedisSummary(raw, history, replaySteps as any));
+
+        // "" FIX: Include analytics in replay steps """"""""""""""""""""""""""
+        const replayStepsWithAnalytics = replaySteps.map((step: any) => ({
+          ...step,
+          user_answer: step.user_answer || "",
+          expected_answer: step.expected_answer || {},
+          reference_answer: step.reference_answer || "",
+          dimensions: step.dimensions || {},
+          timestamp: step.timestamp || 0,
+          analytics: step.answer_analytics || {}, //  From finalize output
+        }));
+
+        return res
+          .status(200)
+          .json(normalizeRedisSummary(raw, history, replayStepsWithAnalytics));
       }
 
-      // ── 2️⃣ InterviewSummary TABLE (persisted after storeNeon) ─────────────
-      // This is the richest DB source — mirrors the finalize node output exactly.
+      // "" 2 InterviewSummary TABLE """""""""""""""""""""""""""""""""""""""""
       const summaryRecord = await prisma.interviewSummary.findUnique({
         where: { interviewId },
         include: {
@@ -535,6 +621,7 @@ export const resumeController = {
                 orderBy: { order: "asc" },
                 select: {
                   order: true,
+                  referenceAnswer: true,
                   question: { select: { content: true, difficulty: true } },
                   response: {
                     select: {
@@ -549,6 +636,10 @@ export const resumeController = {
                           verdict: true,
                           feedback: true,
                           missingConcepts: true,
+                          // "" FIX: select analytics fields """"""""""""""""""
+                          responseAnalyticsMetrics: true,
+                          whyScoreNotHigher: true,
+                          // """""""""""""""""""""""""""""""""""""""""""""""""""
                         },
                       },
                     },
@@ -561,7 +652,9 @@ export const resumeController = {
       });
 
       if (summaryRecord && summaryRecord.interview.userId === userId) {
-        console.log(`[interviewFeedback] InterviewSummary hit for ${interviewId}`);
+        console.log(
+          `[interviewFeedback] InterviewSummary hit for ${interviewId}`,
+        );
 
         const iv = summaryRecord.interview;
         const summary = summaryRecord;
@@ -572,8 +665,10 @@ export const resumeController = {
         });
 
         const TYPE_LABEL: Record<string, string> = {
-          TECHNICAL: "Coding", HR: "Behavioral",
-          SYSTEM_DESIGN: "System Design", BEHAVIORAL: "Behavioral",
+          TECHNICAL: "Coding",
+          HR: "Behavioral",
+          SYSTEM_DESIGN: "System Design",
+          BEHAVIORAL: "Behavioral",
         };
 
         const skillScores: Record<string, number> =
@@ -584,26 +679,69 @@ export const resumeController = {
         const questionScoresRaw: any[] = Array.isArray(summary.questionScores)
           ? summary.questionScores
           : [];
+
+        // "" FIX: Extract analytics from evaluation.responseAnalyticsMetrics ""
         const replayByIndex = new Map(
           (iv.questions ?? []).map((iq) => [
             Number(iq.order ?? 0),
             {
               answer: iq.response?.userAnswer ?? "",
+              reference_answer: iq.referenceAnswer ?? "",
               timestamp: iq.response?.submittedAt
                 ? Math.floor(iq.response.submittedAt.getTime() / 1000)
                 : 0,
-              dimensions: (iq.response?.evaluation?.dimensions ?? {}) as Record<string, number>,
+              dimensions: (iq.response?.evaluation?.dimensions ??
+                {}) as Record<string, number>,
               confidence: iq.response?.evaluation?.confidence ?? null,
+              // "" Parse analytics from JSON column """"""""""""""""""""""""""
+              analytics: (() => {
+                const raw =
+                  (iq.response?.evaluation as any)?.responseAnalyticsMetrics;
+                if (!raw) return {};
+                if (typeof raw === "string") {
+                  try {
+                    return JSON.parse(raw);
+                  } catch {
+                    return {};
+                  }
+                }
+                return raw as Record<string, any>;
+              })(),
+              // """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+              scorePillars: (() => {
+                const raw = (iq.response?.evaluation as any)
+                  ?.whyScoreNotHigher;
+                if (!raw) return {};
+                try {
+                  return JSON.parse(raw);
+                } catch {
+                  return {};
+                }
+              })(),
             },
           ]),
         );
 
         const gapRaw: any = summary.gapAnalysis ?? {};
+
+        const contentQualityRaw: any = (() => {
+          if (!summary.contentQuality) return {};
+          try {
+            return JSON.parse(summary.contentQuality);
+          } catch {
+            return {};
+          }
+        })();
+
         const gapAnalysis: GapAnalysis = {
-          repeated_gaps: Array.isArray(gapRaw.repeated_gaps) ? gapRaw.repeated_gaps : [],
+          repeated_gaps: Array.isArray(gapRaw.repeated_gaps)
+            ? gapRaw.repeated_gaps
+            : [],
           all_gaps: Array.isArray(gapRaw.all_gaps) ? gapRaw.all_gaps : [],
           gap_frequency: gapRaw.gap_frequency ?? {},
-          weak_dimensions: Array.isArray(gapRaw.weak_dimensions) ? gapRaw.weak_dimensions : [],
+          weak_dimensions: Array.isArray(gapRaw.weak_dimensions)
+            ? gapRaw.weak_dimensions
+            : [],
           dim_averages: gapRaw.dim_averages ?? {},
         };
 
@@ -625,97 +763,127 @@ export const resumeController = {
 
         const strengths = whatWentRight.map((w) => w.point);
         const weaknesses = whatWentWrong.map((w) => w.point);
-
         const overall = summary.overallScore;
 
-        const technicalScore = skillScores["Technical Depth"] ?? skillScores["Technical"] ?? 0;
-        const communicationScore = skillScores["Communication"] ?? skillScores["Clarity"] ?? 0;
-        const problemSolvingScore = skillScores["Problem Solving"] ?? skillScores["Domain Knowledge"] ?? overall;
-        const confidenceScore = skillScores["Confidence"] ?? skillScores["Self-Awareness"] ?? 0;
+        const technicalScore =
+          skillScores["Technical Depth"] ??
+          skillScores["Technical"] ??
+          0;
+        const communicationScore =
+          skillScores["Communication"] ?? skillScores["Clarity"] ?? 0;
+        const problemSolvingScore =
+          skillScores["Problem Solving"] ??
+          skillScores["Domain Knowledge"] ??
+          overall;
+        const confidenceScore =
+          skillScores["Confidence"] ?? skillScores["Self-Awareness"] ?? 0;
 
-        // question_scores — InterviewSummary stores them as 0-100 already
-        const question_scores: UnifiedInterviewResult["question_scores"] = questionScoresRaw.map(
-          (q: any) => {
+        // "" FIX: Include analytics in question_scores """"""""""""""""""""""
+        const question_scores: UnifiedInterviewResult["question_scores"] =
+          questionScoresRaw.map((q: any) => {
+            const idx = Number(q.index ?? 0);
+            const replay = replayByIndex.get(idx);
             const verdict = String(q.verdict ?? q.feedback ?? "");
+
+            const dimensions: Record<string, number> =
+              q.dimensions && typeof q.dimensions === "object"
+                ? q.dimensions
+                : replay?.dimensions ?? {};
+
             return {
-<<<<<<< HEAD
-              index:            Number(q.index ?? 0),
-              score:            Number(q.score ?? 0),
-              difficulty:       String(q.difficulty ?? "medium").toLowerCase(),
-              question:         String(q.question ?? ""),
-              user_answer:      String(replayByIndex.get(Number(q.index ?? 0))?.answer ?? q.user_answer ?? ""),
-              verdict,
-              feedback:         verdict,
-              dimensions:       replayByIndex.get(Number(q.index ?? 0))?.dimensions ?? (q.dimensions && typeof q.dimensions === "object" ? q.dimensions : {}),
-              analytics:        q.analytics && typeof q.analytics === "object" ? q.analytics : {},
-              score_pillars:    q.score_pillars && typeof q.score_pillars === "object" ? q.score_pillars : {},
-              missing_concepts: Array.isArray(q.missing_concepts) ? q.missing_concepts.map(String) : [],
-              strengths:        Array.isArray(q.strengths) ? q.strengths.map(String) : [],
-              weaknesses:       Array.isArray(q.weaknesses) ? q.weaknesses.map(String) : [],
-              timestamp:        Number(replayByIndex.get(Number(q.index ?? 0))?.timestamp ?? q.timestamp ?? 0),
-=======
-              index: Number(q.index ?? 0),
+              index: idx,
               score: Number(q.score ?? 0),
               difficulty: String(q.difficulty ?? "medium").toLowerCase(),
               question: String(q.question ?? ""),
+              user_answer: String(
+                replay?.answer ?? q.user_answer ?? "",
+              ),
+              expected_answer:
+                q.expected_answer &&
+                  typeof q.expected_answer === "object"
+                  ? q.expected_answer
+                  : {},
+              reference_answer:
+                String(q.reference_answer ?? "") ||
+                String(replay?.reference_answer ?? ""),
               verdict,
               feedback: verdict,
-              missing_concepts: Array.isArray(q.missing_concepts) ? q.missing_concepts.map(String) : [],
-              strengths: Array.isArray(q.strengths) ? q.strengths.map(String) : [],
-              weaknesses: Array.isArray(q.weaknesses) ? q.weaknesses.map(String) : [],
-              timestamp: Number(q.timestamp ?? 0),
->>>>>>> upstream/main
+              dimensions,
+              // "" FIX: Include full analytics from replay """"""""""""""""""
+              analytics: replay?.analytics ?? {},
+              // """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+              score_pillars:
+                q.score_pillars && typeof q.score_pillars === "object"
+                  ? q.score_pillars
+                  : replay?.scorePillars ?? {},
+              missing_concepts: Array.isArray(q.missing_concepts)
+                ? q.missing_concepts.map(String)
+                : [],
+              strengths: Array.isArray(q.strengths)
+                ? q.strengths.map(String)
+                : [],
+              weaknesses: Array.isArray(q.weaknesses)
+                ? q.weaknesses.map(String)
+                : [],
+              timestamp: Number(
+                replay?.timestamp ?? q.timestamp ?? 0,
+              ),
             };
-          },
-        );
+          });
 
-<<<<<<< HEAD
-        const questions: UnifiedInterviewResult["questions"] = questionScoresRaw.map((q: any) => {
-          const replayDimensions = (replayByIndex.get(Number(q.index ?? 0))?.dimensions ?? {}) as Record<string, number>;
-          const questionDimensions =
-            q.dimensions && typeof q.dimensions === "object" ? (q.dimensions as Record<string, number>) : {};
+        const questions: UnifiedInterviewResult["questions"] =
+          questionScoresRaw.map((q: any) => {
+            const idx = Number(q.index ?? 0);
+            const replay = replayByIndex.get(idx);
+            const dimensions: Record<string, number> =
+              q.dimensions && typeof q.dimensions === "object"
+                ? q.dimensions
+                : replay?.dimensions ?? {};
 
-          return {
-            order:      Number(q.index ?? 0),
-            content:    String(q.question ?? ""),
-            answer:     String(replayByIndex.get(Number(q.index ?? 0))?.answer ?? q.user_answer ?? ""),
-            difficulty: q.difficulty ? String(q.difficulty).toUpperCase() : null,
-            score:      q.score !== undefined ? Number(q.score) : null,
-            dimensions: replayDimensions ?? questionDimensions,
-            evaluation: {
-              overallScore: q.score !== undefined ? Number(q.score) : null,
-              clarity:      Number(replayDimensions.clarity ?? questionDimensions.clarity ?? 0) || null,
-              technical:    Number(replayDimensions.correctness ?? questionDimensions.correctness ?? questionDimensions.depth ?? 0) || null,
-              confidence:   replayByIndex.get(Number(q.index ?? 0))?.confidence != null
-                ? Math.round(Number(replayByIndex.get(Number(q.index ?? 0))?.confidence) * 100)
-                : Number(q.score_pillars?.confidence_score ?? 0) || null,
-              feedback:     String(q.verdict ?? q.feedback ?? ""),
-              strengths:    Array.isArray(q.strengths) && q.strengths.length
-                ? q.strengths.join(" | ") : null,
-              improvements: Array.isArray(q.weaknesses) && q.weaknesses.length
-                ? q.weaknesses.join(" | ") : null,
-            },
-          };
-        });
-=======
-        const questions: UnifiedInterviewResult["questions"] = questionScoresRaw.map((q: any) => ({
-          order: Number(q.index ?? 0),
-          content: String(q.question ?? ""),
-          difficulty: q.difficulty ? String(q.difficulty).toUpperCase() : null,
-          score: q.score !== undefined ? Number(q.score) : null,
-          evaluation: {
-            overallScore: q.score !== undefined ? Number(q.score) : null,
-            clarity: null,
-            technical: null,
-            confidence: null,
-            feedback: String(q.verdict ?? q.feedback ?? ""),
-            strengths: Array.isArray(q.strengths) && q.strengths.length
-              ? q.strengths.join(" | ") : null,
-            improvements: Array.isArray(q.weaknesses) && q.weaknesses.length
-              ? q.weaknesses.join(" | ") : null,
-          },
-        }));
->>>>>>> upstream/main
+            return {
+              order: idx,
+              content: String(q.question ?? ""),
+              answer: String(replay?.answer ?? q.user_answer ?? ""),
+              expected_answer:
+                q.expected_answer &&
+                  typeof q.expected_answer === "object"
+                  ? q.expected_answer
+                  : {},
+              reference_answer:
+                String(q.reference_answer ?? "") ||
+                String(replay?.reference_answer ?? ""),
+              difficulty: q.difficulty
+                ? String(q.difficulty).toUpperCase()
+                : null,
+              score:
+                q.score !== undefined ? Number(q.score) : null,
+              dimensions,
+              evaluation: {
+                overallScore:
+                  q.score !== undefined ? Number(q.score) : null,
+                clarity:
+                  Number(dimensions.clarity ?? 0) || null,
+                technical:
+                  Number(
+                    dimensions.correctness ?? dimensions.depth ?? 0,
+                  ) || null,
+                confidence:
+                  replay?.confidence != null
+                    ? Math.round(Number(replay.confidence) * 100)
+                    : Number(q.score_pillars?.confidence_score ?? 0) ||
+                    null,
+                feedback: String(q.verdict ?? q.feedback ?? ""),
+                strengths:
+                  Array.isArray(q.strengths) && q.strengths.length
+                    ? q.strengths.join(" | ")
+                    : null,
+                improvements:
+                  Array.isArray(q.weaknesses) && q.weaknesses.length
+                    ? q.weaknesses.join(" | ")
+                    : null,
+              },
+            };
+          });
 
         const payload: UnifiedInterviewResult = {
           role: iv.title,
@@ -727,45 +895,58 @@ export const resumeController = {
           summary: summary.summary ?? "No summary available.",
           strengths,
           weaknesses,
-<<<<<<< HEAD
-          improvements:     weaknesses,
-          tips:             summary.tips ?? [],
-          what_went_right:  whatWentRight,
-          what_went_wrong:  whatWentWrong,
-          gap_analysis:     gapAnalysis,
-          score_pillars: {
-            content_score: Number((gapRaw as any)._score_pillars?.content_score ?? overall),
-            delivery_score: Number((gapRaw as any)._score_pillars?.delivery_score ?? communicationScore),
-            confidence_score: Number((gapRaw as any)._score_pillars?.confidence_score ?? confidenceScore),
-            communication_flow_score: Number((gapRaw as any)._score_pillars?.communication_flow_score ?? communicationScore),
-          },
-          analytics: {
-            filler_summary: (gapRaw as any)._analytics?.filler_summary ?? {},
-            flow_summary: (gapRaw as any)._analytics?.flow_summary ?? {},
-            confidence_summary: (gapRaw as any)._analytics?.confidence_summary ?? {},
-            concept_coverage_trend: Array.isArray((gapRaw as any)._analytics?.concept_coverage_trend)
-              ? (gapRaw as any)._analytics.concept_coverage_trend
-              : [],
-          },
-          recovery_score: Number((gapRaw as any)._recovery_score ?? 0),
-          pressure_handling_score: Number((gapRaw as any)._pressure_handling_score ?? 0),
-          conciseness_score: Number((gapRaw as any)._conciseness_score ?? 0),
-          coaching_priorities: Array.isArray((gapRaw as any)._coaching_priorities)
-            ? (gapRaw as any)._coaching_priorities
-            : [],
-          overall_score:    overall,
-          skill_scores:     skillScores,
-          overallScore:     overall,
-=======
           improvements: weaknesses,
           tips: summary.tips ?? [],
           what_went_right: whatWentRight,
           what_went_wrong: whatWentWrong,
           gap_analysis: gapAnalysis,
+          score_pillars: {
+            content_score: Number(
+              contentQualityRaw?.score_pillars?.content_score ?? overall,
+            ),
+            delivery_score: Number(
+              contentQualityRaw?.score_pillars?.delivery_score ??
+              communicationScore,
+            ),
+            confidence_score: Number(
+              contentQualityRaw?.score_pillars?.confidence_score ??
+              confidenceScore,
+            ),
+            communication_flow_score: Number(
+              contentQualityRaw?.score_pillars?.communication_flow_score ??
+              communicationScore,
+            ),
+          },
+          analytics: {
+            filler_summary:
+              contentQualityRaw?.analytics?.filler_summary ?? {},
+            flow_summary:
+              contentQualityRaw?.analytics?.flow_summary ?? {},
+            confidence_summary:
+              contentQualityRaw?.analytics?.confidence_summary ?? {},
+            concept_coverage_trend: Array.isArray(
+              contentQualityRaw?.analytics?.concept_coverage_trend,
+            )
+              ? contentQualityRaw.analytics.concept_coverage_trend
+              : [],
+          },
+          recovery_score: Number(
+            contentQualityRaw?.recovery_score ?? 0,
+          ),
+          pressure_handling_score: Number(
+            contentQualityRaw?.pressure_handling_score ?? 0,
+          ),
+          conciseness_score: Number(
+            contentQualityRaw?.conciseness_score ?? 0,
+          ),
+          coaching_priorities: Array.isArray(
+            contentQualityRaw?.coaching_priorities,
+          )
+            ? contentQualityRaw.coaching_priorities
+            : [],
           overall_score: overall,
           skill_scores: skillScores,
           overallScore: overall,
->>>>>>> upstream/main
           technicalScore,
           communicationScore,
           problemSolvingScore,
@@ -776,8 +957,10 @@ export const resumeController = {
           final_improvement_plan: {
             top_strengths: strengths.slice(0, 3),
             top_weaknesses: weaknesses.slice(0, 3),
-            practice_next: Array.isArray((gapRaw as any)._coaching_priorities)
-              ? (gapRaw as any)._coaching_priorities.slice(0, 3)
+            practice_next: Array.isArray(
+              contentQualityRaw?.coaching_priorities,
+            )
+              ? contentQualityRaw.coaching_priorities.slice(0, 3)
               : [],
           },
         };
@@ -785,8 +968,7 @@ export const resumeController = {
         return res.status(200).json(payload);
       }
 
-      // ── 3️⃣ RAW DB FALLBACK (InterviewQuestion evaluations) ───────────────
-      // Used only when InterviewSummary hasn't been persisted yet.
+      // "" 3 RAW DB FALLBACK """"""""""""""""""""""""""""""""""""""""""""""""
       const interview = await prisma.interview.findFirst({
         where: { id: interviewId, userId },
         include: {
@@ -800,7 +982,8 @@ export const resumeController = {
         },
       });
 
-      if (!interview) return res.status(404).json({ error: "Interview not found" });
+      if (!interview)
+        return res.status(404).json({ error: "Interview not found" });
 
       const user = await prisma.user.findUnique({
         where: { id: userId },
@@ -808,13 +991,12 @@ export const resumeController = {
       });
 
       type Eval = NonNullable<
-        NonNullable<typeof interview.questions[0]["response"]>["evaluation"]
+        NonNullable<(typeof interview.questions)[0]["response"]>["evaluation"]
       >;
       const evals: Eval[] = interview.questions
         .map((iq) => iq.response?.evaluation)
         .filter((e): e is Eval => e != null);
 
-      // Aggregate scores from DB evaluations
       const overallScore = meanOf(evals.map((e) => e.overallScore));
       const technicalScore = meanOf(evals.map((e) => e.technical));
       const communicationScore = meanOf(evals.map((e) => e.clarity));
@@ -828,95 +1010,142 @@ export const resumeController = {
 
       const skill_scores: Record<string, number> = {
         "Technical Depth": technicalScore,
-        "Communication": communicationScore,
+        Communication: communicationScore,
         "Problem Solving": problemSolvingScore,
-        "Confidence": confidenceScore,
+        Confidence: confidenceScore,
       };
 
-      // Aggregate strengths/weaknesses from piped strings in Evaluation
-      const strengths = [...new Set(evals.flatMap((e) => splitPiped(e.strengths?.join ? e.strengths.join("|") : (e.strengths as any))))].slice(0, 5);
-      const weaknesses = [...new Set(evals.flatMap((e) => splitPiped(e.improvements ?? null)))].slice(0, 5);
-      const summaryText = evals.find((e) => e.feedback)?.feedback ?? "No summary available.";
+      const strengths = [
+        ...new Set(
+          evals.flatMap((e) =>
+            splitPiped(
+              e.strengths?.join ? e.strengths.join("|") : (e.strengths as any),
+            ),
+          ),
+        ),
+      ].slice(0, 5);
+      const weaknesses = [
+        ...new Set(
+          evals.flatMap((e) => splitPiped(e.improvements ?? null)),
+        ),
+      ].slice(0, 5);
+      const summaryText =
+        evals.find((e) => e.feedback)?.feedback ?? "No summary available.";
 
       const recommendation =
-        overallScore >= 75 ? "Strong Hire" :
-          overallScore >= 60 ? "Hire" :
-            overallScore >= 45 ? "Leaning No Hire" : "No Hire";
+        overallScore >= 75
+          ? "Strong Hire"
+          : overallScore >= 60
+            ? "Hire"
+            : overallScore >= 45
+              ? "Leaning No Hire"
+              : "No Hire";
 
       const duration_seconds = interview.completedAt
-        ? Math.floor((interview.completedAt.getTime() - interview.createdAt.getTime()) / 1000)
+        ? Math.floor(
+          (interview.completedAt.getTime() -
+            interview.createdAt.getTime()) /
+          1000,
+        )
         : 0;
 
       const TYPE_LABEL: Record<string, string> = {
-        TECHNICAL: "Coding", HR: "Behavioral",
-        SYSTEM_DESIGN: "System Design", BEHAVIORAL: "Behavioral",
+        TECHNICAL: "Coding",
+        HR: "Behavioral",
+        SYSTEM_DESIGN: "System Design",
+        BEHAVIORAL: "Behavioral",
       };
 
-      // question_scores — DB stores score as 0-100 in InterviewQuestion.score
-      const question_scores: UnifiedInterviewResult["question_scores"] = interview.questions.map(
-        (iq) => {
+      // "" FIX: Extract analytics from raw evaluation for fallback path """"""
+      const question_scores: UnifiedInterviewResult["question_scores"] =
+        interview.questions.map((iq) => {
           const ev = iq.response?.evaluation;
           const verdict = ev?.feedback ?? ev?.verdict ?? "";
-          const qStrengths = Array.isArray(ev?.strengths) ? ev.strengths : splitPiped(null);
-          const qWeaknesses = Array.isArray(ev?.weaknesses) ? ev.weaknesses : splitPiped(ev?.improvements ?? null);
+          const qStrengths = Array.isArray(ev?.strengths)
+            ? ev.strengths
+            : splitPiped(null);
+          const qWeaknesses = Array.isArray(ev?.weaknesses)
+            ? ev.weaknesses
+            : splitPiped(ev?.improvements ?? null);
+
+          // "" Parse analytics from responseAnalyticsMetrics """"""""""""""""""
+          const analytics = (() => {
+            const raw = (ev as any)?.responseAnalyticsMetrics;
+            if (!raw) return {};
+            if (typeof raw === "string") {
+              try {
+                return JSON.parse(raw);
+              } catch {
+                return {};
+              }
+            }
+            return raw as Record<string, any>;
+          })();
+          // """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
+
+          const scorePillars = (() => {
+            const raw = (ev as any)?.whyScoreNotHigher;
+            if (!raw) return {};
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return {};
+            }
+          })();
+
           return {
-<<<<<<< HEAD
-            index:            iq.order ?? 0,
-            score:            iq.score ?? 0,                 // 0-100 from DB
-            difficulty:       (iq.question.difficulty ?? "medium").toLowerCase(),
-            question:         iq.question.content,
-            user_answer:      iq.response?.userAnswer ?? "",
-            verdict,
-            feedback:         verdict,
-            dimensions:       (ev as any)?.dimensions ?? {},
-=======
             index: iq.order ?? 0,
-            score: iq.score ?? 0,                 // 0-100 from DB
+            score: iq.score ?? 0,
             difficulty: (iq.question.difficulty ?? "medium").toLowerCase(),
             question: iq.question.content,
+            user_answer: iq.response?.userAnswer ?? "",
+            expected_answer: {},
+            reference_answer: iq.referenceAnswer ?? "",
             verdict,
             feedback: verdict,
->>>>>>> upstream/main
+            dimensions: (ev as any)?.dimensions ?? {},
+            analytics, //  Now populated
+            score_pillars: scorePillars,
             missing_concepts: (ev as any)?.missingConcepts ?? [],
             strengths: qStrengths,
             weaknesses: qWeaknesses,
-            timestamp: Math.floor((iq.response?.submittedAt?.getTime() ?? Date.now()) / 1000),
+            timestamp: Math.floor(
+              (iq.response?.submittedAt?.getTime() ?? Date.now()) / 1000,
+            ),
           };
-        },
-      );
+        });
 
-      const questions: UnifiedInterviewResult["questions"] = interview.questions.map((iq) => {
-        const ev = iq.response?.evaluation ?? null;
-        return {
-<<<<<<< HEAD
-          order:      iq.order,
-          content:    iq.question.content,
-          answer:     iq.response?.userAnswer ?? null,
-          difficulty: iq.question.difficulty ?? null,
-          score:      iq.score ?? null,
-          dimensions: (ev as any)?.dimensions ?? null,
-=======
-          order: iq.order,
-          content: iq.question.content,
-          difficulty: iq.question.difficulty ?? null,
-          score: iq.score ?? null,
->>>>>>> upstream/main
-          evaluation: ev
-            ? {
-              overallScore: ev.overallScore ?? null,
-              clarity: ev.clarity ?? null,
-              technical: ev.technical ?? null,
-              confidence: (ev as any).confidenceScore !== undefined
-                ? Math.round((ev as any).confidenceScore * 100)
-                : null,
-              feedback: ev.feedback ?? ev.verdict ?? null,
-              strengths: Array.isArray(ev.strengths) && ev.strengths.length
-                ? ev.strengths.join(" | ") : (ev.strengths as any) ?? null,
-              improvements: ev.improvements ?? null,
-            }
-            : null,
-        };
-      });
+      const questions: UnifiedInterviewResult["questions"] =
+        interview.questions.map((iq) => {
+          const ev = iq.response?.evaluation ?? null;
+          return {
+            order: iq.order,
+            content: iq.question.content,
+            answer: iq.response?.userAnswer ?? null,
+            expected_answer: null,
+            reference_answer: iq.referenceAnswer ?? null,
+            difficulty: iq.question.difficulty ?? null,
+            score: iq.score ?? null,
+            dimensions: (ev as any)?.dimensions ?? null,
+            evaluation: ev
+              ? {
+                overallScore: ev.overallScore ?? null,
+                clarity: ev.clarity ?? null,
+                technical: ev.technical ?? null,
+                confidence:
+                  (ev as any).confidenceScore !== undefined
+                    ? Math.round((ev as any).confidenceScore * 100)
+                    : null,
+                feedback: ev.feedback ?? ev.verdict ?? null,
+                strengths:
+                  Array.isArray(ev.strengths) && ev.strengths.length
+                    ? ev.strengths.join(" | ")
+                    : (ev.strengths as any) ?? null,
+                improvements: ev.improvements ?? null,
+              }
+              : null,
+          };
+        });
 
       const payload: UnifiedInterviewResult = {
         role: interview.title,
@@ -930,7 +1159,10 @@ export const resumeController = {
         weaknesses,
         improvements: weaknesses,
         tips: [],
-        what_went_right: strengths.map((s) => ({ point: s, tag: "Strength" })),
+        what_went_right: strengths.map((s) => ({
+          point: s,
+          tag: "Strength",
+        })),
         what_went_wrong: weaknesses.map((w) => ({ point: w, tag: "Gap" })),
         gap_analysis: {
           repeated_gaps: [],
@@ -939,7 +1171,6 @@ export const resumeController = {
           weak_dimensions: [],
           dim_averages: {},
         },
-<<<<<<< HEAD
         score_pillars: {
           content_score: overallScore,
           delivery_score: communicationScore,
@@ -956,10 +1187,7 @@ export const resumeController = {
         pressure_handling_score: 0,
         conciseness_score: 0,
         coaching_priorities: [],
-        overall_score:    overallScore,
-=======
         overall_score: overallScore,
->>>>>>> upstream/main
         skill_scores,
         overallScore,
         technicalScore,
@@ -989,17 +1217,11 @@ export const resumeController = {
       if (!session?.user?.id) {
         return res.status(401).json({ message: "Unauthorized" });
       }
-      console.log("Get resume route started.");
 
       const resume = await prisma.resume.findUnique({
         where: { userId: session.user.id },
-        include: {
-          file: true,
-          insights: true,
-        },
+        include: { file: true, insights: true },
       });
-
-      console.log("DEBUG - Resume found:", !!resume);
 
       if (!resume || !resume.file) {
         return res.status(200).json({
@@ -1029,10 +1251,7 @@ export const resumeController = {
     }
   },
 
-  // ── POST /api/interview/:id/complete ─────────────────────────────────────
-  // Reads the full finalize payload from Redis and persists to:
-  //   - InterviewQuestion / Response / Evaluation (per-question)
-  //   - InterviewSummary (full rich summary incl. what_went_right/wrong, gap_analysis)
+  // "" POST /api/interview/:id/complete """""""""""""""""""""""""""""""""""""
   storeNeon: async (req: AuthenticatedRequest, res: Response) => {
     const interviewId = Array.isArray(req.params.id)
       ? req.params.id[0]
@@ -1044,77 +1263,109 @@ export const resumeController = {
     }
 
     try {
-      // ── 1. Load summary from Redis ─────────────────────────────────────────
-      const rawSummary = await redisClient.get(`interview:${interviewId}:summary`);
+      const traceId =
+        (await redisClient.get(`interview:${interviewId}:trace_id`)) ??
+        randomUUID();
+      await logEvent({
+        traceId,
+        stage: "interview.persistence",
+        eventType: "summary_persist_started",
+        interviewId,
+      });
+      // "" 1. Load summary from Redis """""""""""""""""""""""""""""""""""""""
+      const rawSummary = await redisClient.get(
+        `interview:${interviewId}:summary`,
+      );
       if (!rawSummary) {
         res.status(404).json({
-          error: "Summary not found in Redis. Interview may not be complete yet.",
+          error:
+            "Summary not found in Redis. Interview may not be complete yet.",
         });
         return;
       }
       const summary = JSON.parse(rawSummary);
-      const persistedGapAnalysis = {
-        ...(summary.gap_analysis ?? {}),
-        _score_pillars: summary.score_pillars ?? {},
-        _analytics: summary.analytics ?? {},
-        _recovery_score: summary.recovery_score ?? 0,
-        _pressure_handling_score: summary.pressure_handling_score ?? 0,
-        _conciseness_score: summary.conciseness_score ?? 0,
-        _coaching_priorities: summary.coaching_priorities ?? [],
-      };
 
-      // ── 2. Load full question history from Redis ───────────────────────────
+      const whatWentRight = Array.isArray(summary.what_went_right)
+        ? summary.what_went_right
+          .filter((w: any) => typeof w === "object" && w.point)
+          .map((w: any) => ({
+            point: String(w.point || ""),
+            tag: String(w.tag || "General"),
+          }))
+        : [];
+
+      const whatWentWrong = Array.isArray(summary.what_went_wrong)
+        ? summary.what_went_wrong
+          .filter((w: any) => typeof w === "object" && w.point)
+          .map((w: any) => ({
+            point: String(w.point || ""),
+            tag: String(w.tag || "Gap"),
+          }))
+        : [];
+
+      // "" FIX: store gapAnalysis clean, move extras to contentQuality """"""
+      const persistedGapAnalysis = summary.gap_analysis ?? {};
+
+      // "" FIX: contentQuality carries score_pillars, analytics, and other
+      //         summary-level fields that don't fit other columns """"""""""""
+      const persistedContentQuality = JSON.stringify({
+        score_pillars: summary.score_pillars ?? {},
+        analytics: summary.analytics ?? {},
+        recovery_score: summary.recovery_score ?? 0,
+        pressure_handling_score: summary.pressure_handling_score ?? 0,
+        conciseness_score: summary.conciseness_score ?? 0,
+        coaching_priorities: summary.coaching_priorities ?? [],
+      });
+
+      // "" 2. Load full question history from Redis """""""""""""""""""""""""
       const rawHistory = await redisClient.lrange(
         `interview:${interviewId}:history`,
         0,
-        -1
+        -1,
       );
 
       type HistoryStep = {
+        followup: boolean;
+        followup_question: null;
         index: number;
         question: string;
         expected_answer: Record<string, unknown> | null;
         reference_answer: string;
-        target_competency: string;
-        difficulty_rationale: string;
-        anti_repetition_key: string;
-        evidence_anchor: string;
         user_answer: string;
         score: number;
         confidence: number;
         feedback: string;
         verdict: string;
-        why_score_not_higher: string;
-        evidence_snippets: string[];
         difficulty: string;
-        followup: boolean;
-        followup_question: string;
         timestamp: number;
         dimensions: Record<string, number>;
         missing_concepts: string[];
         incorrect_points: string[];
         strengths: string[];
         weaknesses: string[];
-        response_analytics: Record<string, unknown>;
-        response_analytics_metrics: Record<string, unknown>;
+        answer_analytics: Record<string, unknown>;
         score_pillars: {
           content_score: number;
           delivery_score: number;
           confidence_score: number;
           communication_flow_score: number;
         };
+        intent?: string;
+        is_non_answer?: boolean;
       };
 
       const history: HistoryStep[] = rawHistory.map((h: string) =>
-        JSON.parse(h)
+        JSON.parse(h),
       );
 
       if (history.length === 0) {
-        res.status(400).json({ error: "No question history found in Redis." });
+        res
+          .status(400)
+          .json({ error: "No question history found in Redis." });
         return;
       }
 
-      // ── 3. Load the Interview row ──────────────────────────────────────────
+      // "" 3. Load Interview row """"""""""""""""""""""""""""""""""""""""""""
       const interview = await prisma.interview.findUnique({
         where: { id: interviewId },
       });
@@ -1125,21 +1376,32 @@ export const resumeController = {
         return;
       }
 
-      console.log("[storeNeon] Interview status:", interview.status);
-
       if (interview.status === "COMPLETED") {
-        res.json({ success: true, message: "Already persisted", interviewId });
+        res.json({
+          success: true,
+          message: "Already persisted",
+          interviewId,
+        });
         return;
       }
 
-      // ── 4. Read integrity fields from Redis (set by socket handlers) ───────
-      const _redisInt = async (key: string, fallback = 0): Promise<number> => {
+      // "" 4. Read integrity fields from Redis """"""""""""""""""""""""""""""
+      const _redisInt = async (
+        key: string,
+        fallback = 0,
+      ): Promise<number> => {
         const raw = await redisClient.get(key);
         if (!raw) return fallback;
-        const n = parseInt(typeof raw === "string" ? raw : JSON.stringify(raw), 10);
+        const n = parseInt(
+          typeof raw === "string" ? raw : JSON.stringify(raw),
+          10,
+        );
         return isNaN(n) ? fallback : n;
       };
-      const _redisStr = async (key: string, fallback = ""): Promise<string> => {
+      const _redisStr = async (
+        key: string,
+        fallback = "",
+      ): Promise<string> => {
         const raw = await redisClient.get(key);
         if (!raw) return fallback;
         return typeof raw === "string" ? raw : JSON.stringify(raw);
@@ -1147,43 +1409,39 @@ export const resumeController = {
 
       const interruptionCount = await _redisInt(
         `interview:${interviewId}:interruptions`,
-        summary.interruption_count ?? 0
+        summary.interruption_count ?? 0,
       );
       const endReason = await _redisStr(
         `interview:${interviewId}:end_reason`,
-        summary.end_reason ?? "completed"
+        summary.end_reason ?? "completed",
       );
       const sessionDurationSec = await _redisInt(
         `interview:${interviewId}:duration_sec`,
-        summary.duration_seconds ?? 0
+        summary.duration_seconds ?? 0,
       );
       const tabSwitches = await _redisInt(
         `interview:${interviewId}:tab_switches`,
-        0
+        0,
       );
       const fsExits = await _redisInt(
         `interview:${interviewId}:fs_exits`,
-        0
+        0,
       );
       const isEarlyExit = endReason !== "completed";
 
       console.log(
-        `[storeNeon] integrity — endReason=${endReason} interruptions=${interruptionCount} ` +
-        `tabs=${tabSwitches} fs=${fsExits} duration=${sessionDurationSec}s`
+        `[storeNeon] integrity " endReason=${endReason} interruptions=${interruptionCount} ` +
+        `tabs=${tabSwitches} fs=${fsExits} duration=${sessionDurationSec}s`,
       );
 
-      // ── 5. Main transaction ────────────────────────────────────────────────
+      // "" 5. Main transaction """"""""""""""""""""""""""""""""""""""""""""""
       await prisma.$transaction(async (tx) => {
-        // ── 5a. Per-question rows ──────────────────────────────────────────
+        // "" 5a. Per-question rows """"""""""""""""""""""""""""""""""""""""
         for (const step of history) {
           const questionId = `${interviewId}-q${step.index}`;
-
-          // score100: step.score is 0-10 from evaluate_answer
           const score100 = Math.round((step.score ?? 0) * 10);
-
           const dims = step.dimensions ?? {};
 
-          // ── Question (bank row) ──────────────────────────────────────────
           const question = await tx.question.upsert({
             where: { id: questionId },
             update: {
@@ -1199,15 +1457,17 @@ export const resumeController = {
             },
           });
 
-          // ── InterviewQuestion (per-session join row) ─────────────────────
           const interviewQuestion = await tx.interviewQuestion.upsert({
             where: {
-              interviewId_questionId: { interviewId, questionId: question.id },
+              interviewId_questionId: {
+                interviewId,
+                questionId: question.id,
+              },
             },
             update: {
               score: score100,
               order: step.index,
-              referenceAnswer: step.reference_answer ?? undefined,
+              referenceAnswer: step.reference_answer ?? null,
             },
             create: {
               interviewId,
@@ -1218,7 +1478,6 @@ export const resumeController = {
             },
           });
 
-          // ── Response (candidate answer row) ─────────────────────────────
           const response = await tx.response.upsert({
             where: { interviewQuestionId: interviewQuestion.id },
             update: {
@@ -1236,136 +1495,128 @@ export const resumeController = {
             },
           });
 
-          // ── Evaluation (full scoring data) ───────────────────────────────
+          const isNonAnswer = !!(
+            step.is_non_answer ||
+            (step.score === 0 && step.intent)
+          );
+
           await tx.evaluation.upsert({
             where: { responseId: response.id },
             update: {
               overallScore: score100,
               overallScore100: score100,
               confidence: step.confidence ?? null,
-
-              dimensions: dims && Object.keys(dims).length > 0 ? dims : undefined,
-
-              // Comparative analysis
+              dimensions:
+                dims && Object.keys(dims).length > 0 ? dims : undefined,
               missingConcepts: step.missing_concepts ?? [],
               incorrectPoints: step.incorrect_points ?? [],
-
-              // Verdict fields
               strengths: step.strengths ?? [],
               weaknesses: step.weaknesses ?? [],
               verdict: step.verdict ?? step.feedback ?? "",
               feedback: step.verdict ?? step.feedback ?? "",
-
-              // New detailed fields
-              whyScoreNotHigher: step.why_score_not_higher ?? null,
-              evidenceSnippets: step.evidence_snippets ?? [],
-              responseAnalyticsMetrics: step.response_analytics_metrics ? JSON.parse(JSON.stringify(step.response_analytics_metrics)) : undefined,
-
-              // Legacy convenience fields
               clarity: dims["clarity"] ?? dims["star_structure"] ?? null,
-              technical: dims["correctness"] ?? dims["depth"] ?? null,
-
-              // Follow-up
+              technical:
+                dims["correctness"] ?? dims["depth"] ?? null,
               followup: step.followup ?? false,
               followupQuestion: step.followup_question ?? null,
+              isNonAnswer: isNonAnswer ?? false,
+              nonAnswerIntent: step.intent ?? null,
+              // "" FIX: persist audio analytics and score pillars """"""""""
+              responseAnalyticsMetrics: JSON.stringify(step.answer_analytics ?? {}),
+              whyScoreNotHigher: step.score_pillars
+                ? JSON.stringify(step.score_pillars)
+                : null,
+              // """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
             },
             create: {
               responseId: response.id,
               overallScore: score100,
               overallScore100: score100,
               confidence: step.confidence ?? null,
-
               dimensions: dims,
-
               missingConcepts: step.missing_concepts ?? [],
               incorrectPoints: step.incorrect_points ?? [],
-
               strengths: step.strengths ?? [],
               weaknesses: step.weaknesses ?? [],
               verdict: step.verdict ?? step.feedback ?? "",
               feedback: step.verdict ?? step.feedback ?? "",
-
-              whyScoreNotHigher: step.why_score_not_higher ?? null,
-              evidenceSnippets: step.evidence_snippets ?? [],
-              responseAnalyticsMetrics: step.response_analytics_metrics ? JSON.parse(JSON.stringify(step.response_analytics_metrics)) : null,
-
               clarity: dims["clarity"] ?? dims["star_structure"] ?? null,
-              technical: dims["correctness"] ?? dims["depth"] ?? null,
-
-              followup: step.followup ?? false,
-              followupQuestion: step.followup_question ?? null,
+              technical:
+                dims["correctness"] ?? dims["depth"] ?? null,
+              followup: step?.followup ?? false,
+              followupQuestion: step?.followup_question ?? null,
+              isNonAnswer: isNonAnswer ?? false,
+              nonAnswerIntent: step.intent ?? null,
+              // "" FIX: persist audio analytics and score pillars """"""""""
+              responseAnalyticsMetrics: JSON.stringify(step.answer_analytics ?? {}),
+              whyScoreNotHigher: step.score_pillars
+                ? JSON.stringify(step.score_pillars)
+                : null,
+              // """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""
             },
           });
         }
 
-        // ── 5b. InterviewSummary ─────────────────────────────────────────────
-        const gapAnalysis = summary.gap_analysis ?? {};
-        const scorePillars = summary.score_pillars ?? {};
-        const analyticsBlock = summary.analytics ?? {};
-        const insightsBlock = summary.insights ?? {};
-
+        // "" 5b. InterviewSummary """""""""""""""""""""""""""""""""""""""""
         await tx.interviewSummary.upsert({
           where: { interviewId },
           update: {
-            // Deterministic scores
             overallScore: summary.overall_score ?? 0,
             plainAvg: summary.plain_avg ?? 0,
             weightedAvg: summary.weighted_avg ?? 0,
-            recommendation: summary.recommendation ?? "Needs More Evaluation",
+            recommendation:
+              summary.recommendation ?? "Needs More Evaluation",
             durationSeconds: summary.duration_seconds ?? 0,
-<<<<<<< HEAD
-            summary:         summary.summary ?? "",
-            whatWentRight:   summary.what_went_right   ?? [],
-            whatWentWrong:   summary.what_went_wrong   ?? [],
-            tips:            summary.tips              ?? [],
-            skillScores:     summary.skill_scores      ?? {},
-            questionScores:  summary.question_scores   ?? [],
-            gapAnalysis:     persistedGapAnalysis,
-=======
-
-            // LLM-narrated content
             summary: summary.summary ?? "",
-            contentQuality: summary.content_quality ?? null,
+            whatWentRight: whatWentRight,
+            whatWentWrong: whatWentWrong,
+            tips: summary.tips ?? [],
+            skillScores:
+              summary.skill_scores &&
+                typeof summary.skill_scores === "object"
+                ? summary.skill_scores
+                : {},
+            questionScores: summary.question_scores ?? [],
+            // "" FIX: clean gapAnalysis " no more buried _fields """"""""""
+            gapAnalysis: persistedGapAnalysis,
+            // "" FIX: contentQuality carries score_pillars + analytics """""
+            contentQuality: persistedContentQuality,
+            // """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
             deliveryQuality: summary.delivery_quality ?? null,
             interviewIntegrity: summary.interview_integrity ?? null,
-
-            whatWentRight: summary.what_went_right ?? [],
-            whatWentWrong: summary.what_went_wrong ?? [],
-            tips: summary.tips ?? [],
-
-            // Skill + question data
-            skillScores: summary.skill_scores ?? {},
-            questionScores: summary.question_scores ?? [],
-
-            // Gap analysis (deterministic)
-            gapAnalysis: gapAnalysis,
-
-            // Integrity fields
             endReason: endReason,
             isEarlyExit: isEarlyExit,
             interruptionCount: interruptionCount,
->>>>>>> upstream/main
           },
           create: {
             interviewId,
-
             overallScore: summary.overall_score ?? 0,
             plainAvg: summary.plain_avg ?? 0,
             weightedAvg: summary.weighted_avg ?? 0,
-            recommendation: summary.recommendation ?? "Needs More Evaluation",
+            recommendation:
+              summary.recommendation ?? "Needs More Evaluation",
             durationSeconds: summary.duration_seconds ?? 0,
-<<<<<<< HEAD
-            summary:         summary.summary ?? "",
-            whatWentRight:   summary.what_went_right   ?? [],
-            whatWentWrong:   summary.what_went_wrong   ?? [],
-            tips:            summary.tips              ?? [],
-            skillScores:     summary.skill_scores      ?? {},
-            questionScores:  summary.question_scores   ?? [],
-            gapAnalysis:     persistedGapAnalysis,
+            summary: summary.summary ?? "",
+            whatWentRight: whatWentRight,
+            whatWentWrong: whatWentWrong,
+            tips: summary.tips ?? [],
+            skillScores:
+              summary.skill_scores &&
+                typeof summary.skill_scores === "object"
+                ? summary.skill_scores
+                : {},
+            questionScores: summary.question_scores ?? [],
+            gapAnalysis: persistedGapAnalysis,
+            contentQuality: persistedContentQuality,
+            deliveryQuality: summary.delivery_quality ?? null,
+            interviewIntegrity: summary.interview_integrity ?? null,
+            endReason: endReason,
+            isEarlyExit: isEarlyExit,
+            interruptionCount: interruptionCount,
           },
         });
 
-        // ── Mark interview completed ──────────────────────────────────────
+        // "" 5c. Mark interview completed """""""""""""""""""""""""""""""""
         const finalInterviewStatus =
           summary.end_reason && summary.end_reason !== "completed"
             ? "CANCELLED"
@@ -1375,57 +1626,34 @@ export const resumeController = {
 
         await tx.interview.update({
           where: { id: interviewId },
-          data:  {
+          data: {
             status: finalInterviewStatus,
             completedAt: interview.completedAt ?? new Date(),
-=======
-
-            summary: summary.summary ?? "",
-            contentQuality: summary.content_quality ?? null,
-            deliveryQuality: summary.delivery_quality ?? null,
-            interviewIntegrity: summary.interview_integrity ?? null,
-
-            whatWentRight: summary.what_went_right ?? [],
-            whatWentWrong: summary.what_went_wrong ?? [],
-            tips: summary.tips ?? [],
-
-            skillScores: summary.skill_scores ?? {},
-            questionScores: summary.question_scores ?? [],
-
-            gapAnalysis: gapAnalysis,
-            endReason: endReason,
-            isEarlyExit: isEarlyExit,
-            interruptionCount: interruptionCount,
-          },
-        });
-
-        // ── 5c. Mark interview completed — write all integrity fields ────────
-        await tx.interview.update({
-          where: { id: interviewId },
-          data: {
-            status: "COMPLETED",
-            completedAt: new Date(),
             endReason: endReason,
             interruptionCount: interruptionCount,
             sessionDurationSec: sessionDurationSec,
             tabSwitches: tabSwitches,
             fsExits: fsExits,
->>>>>>> upstream/main
           },
         });
       });
 
-      // ── 6. GapReport upsert (outside transaction — non-critical) ──────────
+      // "" 6. GapReport upsert """"""""""""""""""""""""""""""""""""""""""""""
       try {
         const gapAnalysis = summary.gap_analysis ?? {};
-        const newFreq = (gapAnalysis.gap_frequency ?? {}) as Record<string, number>;
-        const newDimAvgs = (gapAnalysis.dim_averages ?? {}) as Record<string, number>;
+        const newFreq = (gapAnalysis.gap_frequency ?? {}) as Record<
+          string,
+          number
+        >;
+        const newDimAvgs = (gapAnalysis.dim_averages ?? {}) as Record<
+          string,
+          number
+        >;
 
         const existing = await prisma.gapReport.findUnique({
           where: { userId: interview.userId },
         });
 
-        // Merge concept frequencies cumulatively across all past interviews
         const mergedFreq: Record<string, number> = {
           ...((existing?.conceptFrequency as Record<string, number>) ?? {}),
         };
@@ -1433,20 +1661,18 @@ export const resumeController = {
           mergedFreq[concept] = (mergedFreq[concept] ?? 0) + count;
         }
 
-        // Persistent gaps = any concept that has appeared as a gap in 2+ questions
-        // across all time (cumulative frequency >= 2)
         const persistentGaps = Object.entries(mergedFreq)
           .filter(([, c]) => c >= 2)
           .sort(([, a], [, b]) => b - a)
           .map(([k]) => k);
 
-        // Rolling average of dimension averages (70% existing weight, 30% new)
-        const existingDimAvgs = (existing?.dimensionAverages as Record<string, number>) ?? {};
+        const existingDimAvgs =
+          (existing?.dimensionAverages as Record<string, number>) ?? {};
         const mergedDimAvgs: Record<string, number> = { ...existingDimAvgs };
         for (const [dim, avg] of Object.entries(newDimAvgs)) {
           if (existingDimAvgs[dim] !== undefined) {
             mergedDimAvgs[dim] = parseFloat(
-              (existingDimAvgs[dim] * 0.7 + avg * 0.3).toFixed(2)
+              (existingDimAvgs[dim] * 0.7 + avg * 0.3).toFixed(2),
             );
           } else {
             mergedDimAvgs[dim] = avg;
@@ -1471,14 +1697,16 @@ export const resumeController = {
         });
 
         console.log(
-          `[storeNeon] GapReport updated — ${persistentGaps.length} persistent gaps`
+          `[storeNeon] GapReport updated " ${persistentGaps.length} persistent gaps`,
         );
       } catch (gapErr: any) {
-        // Non-fatal — log and continue
-        console.error("[storeNeon] GapReport upsert failed:", gapErr.message);
+        console.error(
+          "[storeNeon] GapReport upsert failed:",
+          gapErr.message,
+        );
       }
 
-      // ── 7. Save score to Redis score-history list (for chart) ─────────────
+      // "" 7. Save score to Redis score-history """""""""""""""""""""""""""""
       try {
         const historyKey = `user:${interview.userId}:interview_scores`;
         const existingScores = await redisClient.lrange(historyKey, 0, -1);
@@ -1499,14 +1727,17 @@ export const resumeController = {
               role: summary.role,
               date_iso: summary.date_iso,
               recommendation: summary.recommendation,
-            })
+            }),
           );
         }
       } catch (scoreHistErr: any) {
-        console.error("[storeNeon] Score history push failed:", scoreHistErr.message);
+        console.error(
+          "[storeNeon] Score history push failed:",
+          scoreHistErr.message,
+        );
       }
 
-      // ── 8. Cleanup Redis keys for this interview ───────────────────────────
+      // "" 8. Cleanup Redis keys """""""""""""""""""""""""""""""""""""""""""""
       await Promise.all([
         redisClient.del(`interview:${interviewId}:summary`),
         redisClient.del(`interview:${interviewId}:history`),
@@ -1521,10 +1752,22 @@ export const resumeController = {
       ]);
 
       console.log(
-        `[storeNeon] Interview ${interviewId} persisted ✅ ` +
+        `[storeNeon] Interview ${interviewId} persisted ... ` +
         `(${history.length} questions, score=${summary.overall_score}/100, ` +
-        `endReason=${endReason}, interruptions=${interruptionCount})`
+        `endReason=${endReason}, interruptions=${interruptionCount})`,
       );
+      await logEvent({
+        traceId,
+        stage: "interview.persistence",
+        eventType: "summary_persist_completed",
+        userId: interview.userId,
+        interviewId,
+        payload: {
+          questionsStored: history.length,
+          overallScore: summary.overall_score,
+          recommendation: summary.recommendation,
+        },
+      });
 
       res.json({
         success: true,
@@ -1542,15 +1785,17 @@ export const resumeController = {
     }
   },
 
-  // ── POST /api/start-interview ─────────────────────────────────────────────
+  // "" POST /api/start-interview """""""""""""""""""""""""""""""""""""""""""""
   startInterview: async (req: AuthenticatedRequest, res: Response) => {
     try {
       const session = req.session;
-      if (!session?.user?.id) return res.status(401).json({ message: "Unauthorized" });
+      if (!session?.user?.id)
+        return res.status(401).json({ message: "Unauthorized" });
 
       const userId = session.user.id;
       const {
-        interviewTitle, interviewType,
+        interviewTitle,
+        interviewType,
         description = "",
         difficulty = "medium",
         questionCount = 10,
@@ -1558,13 +1803,25 @@ export const resumeController = {
       } = req.body;
 
       if (!interviewTitle?.trim() || !interviewType)
-        return res.status(400).json({ message: "Title and type are required" });
+        return res
+          .status(400)
+          .json({ message: "Title and type are required" });
 
       const interview = await prisma.interview.create({
-        data: { title: interviewTitle.trim(), type: interviewType, userId, status: "CREATED" },
+        data: {
+          title: interviewTitle.trim(),
+          type: interviewType,
+          userId,
+          status: "CREATED",
+        },
       });
 
-      await redisClient.set(`interview:${interview.id}:user_id`, userId, "EX", 60 * 60 * 24);
+      await redisClient.set(
+        `interview:${interview.id}:user_id`,
+        userId,
+        "EX",
+        60 * 60 * 24,
+      );
 
       const job = {
         type: "interview_creation",
@@ -1582,19 +1839,24 @@ export const resumeController = {
       };
 
       await redisClient.rpush("jobs", JSON.stringify(job));
-      console.log(`✅ Interview job queued — id=${interview.id}`);
-      return res.status(201).json({ message: "Interview Created", data: interview });
+      console.log(`... Interview job queued " id=${interview.id}`);
+      return res
+        .status(201)
+        .json({ message: "Interview Created", data: interview });
     } catch (error) {
       console.error("[startInterview] Error:", error);
-      return res.status(500).json({ message: "Failed to create interview" });
+      return res
+        .status(500)
+        .json({ message: "Failed to create interview" });
     }
   },
 
-  // ── GET /api/skills-insights ──────────────────────────────────────────────
+  // "" GET /api/skills-insights """"""""""""""""""""""""""""""""""""""""""""""
   getSkillsInsights: async (req: AuthenticatedRequest, res: Response) => {
     try {
       const session = req.session;
-      if (!session?.user?.id) return res.status(401).json({ message: "Unauthorized" });
+      if (!session?.user?.id)
+        return res.status(401).json({ message: "Unauthorized" });
       const userId = session.user.id;
 
       const userSkills = await prisma.userSkill.findMany({
@@ -1619,12 +1881,12 @@ export const resumeController = {
         include: { insights: true },
       });
 
-      // Build per-category score map
       const categoryScores: Record<string, number[]> = {};
       for (const interview of interviews) {
         const type = interview.type;
         for (const iq of interview.questions) {
-          const score = iq.score ?? iq.response?.evaluation?.overallScore ?? null;
+          const score =
+            iq.score ?? iq.response?.evaluation?.overallScore ?? null;
           if (score !== null) {
             if (!categoryScores[type]) categoryScores[type] = [];
             categoryScores[type].push(score);
@@ -1639,24 +1901,32 @@ export const resumeController = {
         );
       }
 
-      const sortedCategories = Object.entries(categoryAverages).sort((a, b) => b[1] - a[1]);
+      const sortedCategories = Object.entries(categoryAverages).sort(
+        (a, b) => b[1] - a[1],
+      );
       const strongest = sortedCategories[0] ?? null;
-      const weakest = sortedCategories[sortedCategories.length - 1] ?? null;
+      const weakest =
+        sortedCategories[sortedCategories.length - 1] ?? null;
 
       const allScores = Object.values(categoryScores).flat();
       const overallAvg = allScores.length
-        ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length)
+        ? Math.round(
+          allScores.reduce((a, b) => a + b, 0) / allScores.length,
+        )
         : null;
 
       const coveredTypes = new Set(interviews.map((iv) => iv.type));
-
       const weakAreas: string[] = resume?.insights?.weakAreas ?? [];
 
       const TYPE_LABEL: Record<string, string> = {
-        TECHNICAL: "Technical", HR: "HR / Behavioral",
-        SYSTEM_DESIGN: "System Design", BEHAVIORAL: "Behavioral",
+        TECHNICAL: "Technical",
+        HR: "HR / Behavioral",
+        SYSTEM_DESIGN: "System Design",
+        BEHAVIORAL: "Behavioral",
       };
-      const uncoveredTypes = (["TECHNICAL", "HR", "SYSTEM_DESIGN", "BEHAVIORAL"] as const)
+      const uncoveredTypes = (
+        ["TECHNICAL", "HR", "SYSTEM_DESIGN", "BEHAVIORAL"] as const
+      )
         .filter((t) => !coveredTypes.has(t))
         .map((t) => TYPE_LABEL[t]);
 
@@ -1671,15 +1941,30 @@ export const resumeController = {
           name: us.skill.name,
           category: us.skill.category ?? "Other",
         })),
-        strongest: strongest ? { label: TYPE_LABEL[strongest[0]] ?? strongest[0], score: strongest[1] } : null,
-        weakest: weakest ? { label: TYPE_LABEL[weakest[0]] ?? weakest[0], score: weakest[1] } : null,
+        strongest: strongest
+          ? {
+            label: TYPE_LABEL[strongest[0]] ?? strongest[0],
+            score: strongest[1],
+          }
+          : null,
+        weakest: weakest
+          ? {
+            label: TYPE_LABEL[weakest[0]] ?? weakest[0],
+            score: weakest[1],
+          }
+          : null,
         overallAvg,
         categoryAverages: Object.fromEntries(
-          Object.entries(categoryAverages).map(([k, v]) => [TYPE_LABEL[k] ?? k, v]),
+          Object.entries(categoryAverages).map(([k, v]) => [
+            TYPE_LABEL[k] ?? k,
+            v,
+          ]),
         ),
         upcomingSkills,
         totalInterviews: interviews.length,
-        interviewsCovered: [...coveredTypes].map((t) => TYPE_LABEL[t] ?? t),
+        interviewsCovered: [...coveredTypes].map(
+          (t) => TYPE_LABEL[t] ?? t,
+        ),
       });
     } catch (error) {
       console.error("[getSkillsInsights]", error);
@@ -1690,7 +1975,8 @@ export const resumeController = {
   generateInterviewPlan: async (req: AuthenticatedRequest, res: Response) => {
     try {
       const session = req.session;
-      if (!session?.user?.id) return res.status(401).json({ message: "Unauthorized" });
+      if (!session?.user?.id)
+        return res.status(401).json({ message: "Unauthorized" });
       const userId = session.user.id;
       const {
         interviewType,
@@ -1702,7 +1988,9 @@ export const resumeController = {
       } = req.body;
 
       if (!interviewType || !targetRole?.trim() || !numQuestions || !duration) {
-        return res.status(400).json({ message: "Missing required fields" });
+        return res
+          .status(400)
+          .json({ message: "Missing required fields" });
       }
 
       const job = {
@@ -1718,24 +2006,30 @@ export const resumeController = {
       };
 
       await redisClient.rpush("jobs", JSON.stringify(job));
-      console.log(`✅ Generate Plan Queued — id=${userId}`);
+      console.log(`... Generate Plan Queued " id=${userId}`);
       return res.status(201).json({ message: "Plan Generated" });
     } catch (error) {
       console.error("[generateInterviewPlan] Error:", error);
-      return res.status(500).json({ message: "Failed to create plan" });
+      return res
+        .status(500)
+        .json({ message: "Failed to create plan" });
     }
   },
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 // UTILITY
-// ─────────────────────────────────────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 function mapDifficulty(d: string): "EASY" | "MEDIUM" | "HARD" | null {
   switch ((d ?? "").toLowerCase()) {
     case "intro":
-    case "easy": return "EASY";
-    case "medium": return "MEDIUM";
-    case "hard": return "HARD";
-    default: return null;
+    case "easy":
+      return "EASY";
+    case "medium":
+      return "MEDIUM";
+    case "hard":
+      return "HARD";
+    default:
+      return null;
   }
 }

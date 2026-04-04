@@ -18,6 +18,8 @@
  * ============================================================================
  */
 
+import { AudioMetrics } from "@/lib/audioAnalytics";
+
 interface MicSample {
   t: number;
   rms: number;
@@ -111,44 +113,38 @@ export class AnswerAnalyticsBuilder {
    * Build complete analytics envelope for an answer.
    * Called when user submits their response.
    */
-  build(answerText: string): AnswerAnalyticsEnvelope {
+  build(answerText: string, audioMetrics: AudioMetrics, durationMs: number): AnswerAnalyticsEnvelope {
     const submittedAt = Date.now();
     const questionAt = this.questionReceivedAtRef.current;
     const firstSpeechAt = this.firstSpeechAtRef.current;
 
-    // Determine window of samples to analyze
-    const startAt = firstSpeechAt ?? questionAt;
-    const sampleWindow = this.micSampleBufferRef.current.filter(
-      (s) => s.t >= startAt && s.t <= submittedAt
-    );
-
-    // Calculate word count
     const wordCount = answerText
       .split(/\s+/)
       .filter((w) => w.length > 0).length;
 
-    // Analyze samples for speaking vs silence
-    const { activeCount, longPauseCount, pauseMs, speakingMs } =
-      this._analyzeSpeechPattern(sampleWindow);
+    // "" Use AudioMetricsCollector data directly """"""""""""""""""""""
+    // Drop the micSampleBufferRef window calculation entirely.
+    // AudioMetricsCollector is higher resolution and per-answer scoped.
 
-    const samples = sampleWindow.length;
-    const silenceMs = Math.max(0, samples * this.SAMPLE_INTERVAL_MS - speakingMs);
-    const pauseRatio = samples > 0 ? silenceMs / (samples * this.SAMPLE_INTERVAL_MS) : 0;
+    const samples = audioMetrics.rmsValues.length;
+    const activeCount = audioMetrics.activeSamples;
+    const speakingMs = audioMetrics.speakingMs;
+    const silenceMs = audioMetrics.totalSilenceMs;
+    const longPauseCount = audioMetrics.silenceGaps.filter(
+      (g) => g > this.LONG_PAUSE_THRESHOLD_MS
+    ).length;
+    const pauseRatio =
+      speakingMs + silenceMs > 0
+        ? silenceMs / (speakingMs + silenceMs)
+        : 0;
+    // """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
-    // Calculate response latency (time from question to first speech)
     const latency = Math.max(0, (firstSpeechAt ?? submittedAt) - questionAt);
 
-    // Calculate words per minute
-    // Use max of speaking time or elapsed time to avoid div by zero
-    const mins = Math.max(
-      0.25,
-      speakingMs / 60000 || (submittedAt - questionAt) / 60000
-    );
+    // "" Use actual durationMs for WPM, not speaking estimate """""""""
+    const mins = Math.max(0.1, durationMs / 60000);
     const wpm = wordCount / mins;
-
-    // Calculate RMS and ZCR statistics
-    const rmsValues = sampleWindow.map((s) => s.rms);
-    const zcrValues = sampleWindow.map((s) => s.zcr);
+    // """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
     return {
       question_received_at_ms: questionAt,
@@ -161,10 +157,10 @@ export class AnswerAnalyticsBuilder {
         silence_ms: silenceMs,
         pause_ratio: Number(pauseRatio.toFixed(3)),
         long_pause_count: longPauseCount,
-        rms_mean: Number(this._mean(rmsValues).toFixed(6)),
-        rms_std: Number(this._std(rmsValues).toFixed(6)),
-        zcr_mean: Number(this._mean(zcrValues).toFixed(6)),
-        zcr_std: Number(this._std(zcrValues).toFixed(6)),
+        rms_mean: Number(audioMetrics.avgRMS.toFixed(6)),
+        rms_std: Number(audioMetrics.rmsStd.toFixed(6)),
+        zcr_mean: Number(audioMetrics.zcrMean.toFixed(6)),
+        zcr_std: Number(audioMetrics.zcrStd.toFixed(6)),
       },
       speech: {
         word_count: wordCount,

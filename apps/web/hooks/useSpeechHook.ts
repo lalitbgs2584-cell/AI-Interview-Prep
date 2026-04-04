@@ -10,7 +10,7 @@ declare global {
 interface UseSpeechToTextOptions {
   /** Called when the user has been silent for `silenceThresholdMs` after speaking. Receives the FULL accumulated answer. */
   onFinalMessage?: (text: string) => void;
-  /** Called the moment voice activity is detected — used for AI interruption. */
+  /** Called the moment voice activity is detected " used for AI interruption. */
   onSpeechStart?: () => void;
   /** Milliseconds of silence before the accumulated answer is submitted. Default: 3000 */
   silenceThresholdMs?: number;
@@ -24,7 +24,7 @@ export const useSpeechToText = ({
   const [transcript, setTranscript] = useState("");
   const [isListening, setIsListening] = useState(false);
 
-  // ── Refs (don't trigger re-renders, safe in closures) ──────────────────
+  // "" Refs (don't trigger re-renders, safe in closures) """"""""""""""""""
   const recognitionRef       = useRef<any>(null);
   const silenceTimerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const accumulatedRef       = useRef<string>("");   // full answer being built
@@ -40,7 +40,7 @@ export const useSpeechToText = ({
   onFinalMessageRef.current = onFinalMessage;
   onSpeechStartRef.current  = onSpeechStart;
 
-  // ── Clear silence timer helper ──────────────────────────────────────────
+  // "" Clear silence timer helper """"""""""""""""""""""""""""""""""""""""""
   const clearSilenceTimer = useCallback(() => {
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
@@ -48,7 +48,7 @@ export const useSpeechToText = ({
     }
   }, []);
 
-  // ── Schedule submission after silence ──────────────────────────────────
+  // "" Schedule submission after silence """"""""""""""""""""""""""""""""""
   const scheduleSend = useCallback(() => {
     clearSilenceTimer();
     silenceTimerRef.current = setTimeout(() => {
@@ -62,7 +62,7 @@ export const useSpeechToText = ({
     }, silenceThresholdMs);
   }, [clearSilenceTimer, silenceThresholdMs]);
 
-  // ── Build and attach a recognition instance ────────────────────────────
+  // "" Build and attach a recognition instance """"""""""""""""""""""""""""
   const createAndStart = useCallback(() => {
     const SpeechRecognition =
       window.SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -84,7 +84,7 @@ export const useSpeechToText = ({
     recognition.lang            = "en-US";
     recognition.maxAlternatives = 1;
 
-    // ── Handlers ──────────────────────────────────────────────────────────
+    // "" Handlers """"""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
     recognition.onstart = () => {
       isListeningRef.current = true;
@@ -92,7 +92,7 @@ export const useSpeechToText = ({
     };
 
     /**
-     * onsoundstart fires as soon as ANY sound is detected — before isFinal.
+     * onsoundstart fires as soon as ANY sound is detected " before isFinal.
      * This is the earliest possible signal that the user is speaking,
      * which is what we need to interrupt the AI.
      */
@@ -121,7 +121,7 @@ export const useSpeechToText = ({
         accumulatedRef.current = (accumulatedRef.current + " " + newFinalChunk).trimStart();
         // Show full accumulated + any current interim in the textarea
         setTranscript(accumulatedRef.current + interimText);
-        // Reset silence countdown — user is still speaking
+        // Reset silence countdown " user is still speaking
         scheduleSend();
       } else if (interimText) {
         // Show live partial without committing it yet
@@ -160,7 +160,7 @@ export const useSpeechToText = ({
     }
   }, [scheduleSend]);
 
-  // ── Public API ──────────────────────────────────────────────────────────
+  // "" Public API """"""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
   const startListening = useCallback(() => {
     shouldListenRef.current = true;

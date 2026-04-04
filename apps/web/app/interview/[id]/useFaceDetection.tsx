@@ -23,7 +23,7 @@ function useFaceDetection(
   const POLL_INTERVAL_MS = 600;
   const lastPollTime = useRef(0);
 
-  // ── Load MediaPipe FaceDetector once ──────────────────────────────────────
+  // "" Load MediaPipe FaceDetector once """"""""""""""""""""""""""""""""""""""
   useEffect(() => {
     let cancelled = false;
 
@@ -60,7 +60,7 @@ function useFaceDetection(
     };
   }, []);
 
-  // ── Detection loop ────────────────────────────────────────────────────────
+  // "" Detection loop """"""""""""""""""""""""""""""""""""""""""""""""""""""""
   useEffect(() => {
     if (!modelsReady || !enabled) {
       // Reset state when disabled

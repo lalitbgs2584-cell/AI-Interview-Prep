@@ -1,8 +1,8 @@
-/* ══════════════════════════════════════
-   animations.css  —  Keyframes & Utils
-══════════════════════════════════════ */
+/* --------------------------------------
+   animations.css  "  Keyframes & Utils
+-------------------------------------- */
 
-/* ── Entry animations ── */
+/* "" Entry animations "" */
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(24px) scale(0.98); }
   to   { opacity: 1; transform: translateY(0)    scale(1);    }
@@ -13,7 +13,7 @@
   to   { opacity: 1; transform: translateY(0);     }
 }
 
-/* ── Looping effects ── */
+/* "" Looping effects "" */
 @keyframes dotPulse {
   0%, 100% { opacity: 1;    transform: scale(1);   }
   50%       { opacity: 0.25; transform: scale(0.6); }
@@ -58,13 +58,13 @@
   to   { opacity: 1; transform: translateY(0);    }
 }
 
-/* ── Staggered fade-up helpers ── */
+/* "" Staggered fade-up helpers "" */
 .anim-0 { animation: fadeUp var(--dur-slow) 0.00s var(--ease-snap) both; }
 .anim-1 { animation: fadeUp var(--dur-slow) 0.08s var(--ease-snap) both; }
 .anim-2 { animation: fadeUp var(--dur-slow) 0.16s var(--ease-snap) both; }
 .anim-3 { animation: fadeUp var(--dur-slow) 0.24s var(--ease-snap) both; }
 
-/* ── Reduced-motion override ── */
+/* "" Reduced-motion override "" */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

@@ -1,5 +1,5 @@
 BEHAVIOURAL_QUESTION=f"""
-## 🟢 EASY (1–17)
+##  EASY (1"17)
 
 **Que-1:** Tell me about yourself.
 **Ans-1:** I am a motivated and detail-oriented professional passionate about continuous learning and problem-solving. I bring strong communication skills and the ability to adapt quickly to new environments. I am excited to contribute meaningfully to any team I am part of.
@@ -86,7 +86,7 @@ BEHAVIOURAL_QUESTION=f"""
 
 ---
 
-## 🟡 MODERATE (18–34)
+##  MODERATE (18"34)
 
 **Que-18:** Describe a time you had to meet a tight deadline. How did you handle it?
 **Ans-18:** Our team was given only two days to complete a report that usually takes a week. I immediately mapped out the tasks, divided responsibilities clearly, and eliminated all non-essential work. We delivered on time by staying focused and communicating constantly throughout the process.
@@ -134,7 +134,7 @@ BEHAVIOURAL_QUESTION=f"""
 ---
 
 **Que-27:** Tell me about a time you had to work with someone very different from you.
-**Ans-27:** I was paired with a colleague who had a very different working style — they preferred informal communication while I liked structured updates. I adapted by finding a middle ground, holding brief informal check-ins while keeping shared notes for clarity. The project succeeded and we built a strong mutual respect.
+**Ans-27:** I was paired with a colleague who had a very different working style " they preferred informal communication while I liked structured updates. I adapted by finding a middle ground, holding brief informal check-ins while keeping shared notes for clarity. The project succeeded and we built a strong mutual respect.
 
 ---
 
@@ -173,7 +173,7 @@ BEHAVIOURAL_QUESTION=f"""
 
 ---
 
-## 🔴 DIFFICULT (35–50)
+## " DIFFICULT (35"50)
 
 **Que-35:** Describe a time you had to make a difficult decision with incomplete information. What was your process?
 **Ans-35:** We needed to decide whether to proceed with a product launch when key user testing data was still incomplete. I gathered whatever partial data was available, consulted experienced colleagues, and assessed the risks of delaying versus launching. I made a calculated decision to launch with a defined rollback plan, and it succeeded without major issues.
@@ -201,7 +201,7 @@ BEHAVIOURAL_QUESTION=f"""
 ---
 
 **Que-40:** Tell me about a time you had to balance short-term results with long-term goals. How did you decide?
-**Ans-40:** We were pressured to ship a feature quickly for a sales deal, but doing so would have created significant technical debt. I proposed a middle path — a lightweight version of the feature that met the immediate need without compromising long-term architecture. Both the business goal and the technical integrity were preserved.
+**Ans-40:** We were pressured to ship a feature quickly for a sales deal, but doing so would have created significant technical debt. I proposed a middle path " a lightweight version of the feature that met the immediate need without compromising long-term architecture. Both the business goal and the technical integrity were preserved.
 
 ---
 

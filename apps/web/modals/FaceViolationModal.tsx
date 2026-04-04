@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 /**
  * ============================================================================
  * FaceViolationModal Component
@@ -63,7 +63,7 @@ export function FaceViolationModal({
           boxShadow:     "0 0 60px rgba(239,68,68,0.2), 0 32px 64px rgba(0,0,0,0.7)",
         }}
       >
-        {/* ── Icon ── */}
+        {/* "" Icon "" */}
         <div style={{ display: "flex", justifyContent: "center", marginBottom: "24px" }}>
           <div
             style={{
@@ -108,7 +108,7 @@ export function FaceViolationModal({
           </div>
         </div>
 
-        {/* ── Title ── */}
+        {/* "" Title "" */}
         <h2
           style={{
             textAlign:  "center",
@@ -125,7 +125,7 @@ export function FaceViolationModal({
               : "No Face Detected"}
         </h2>
 
-        {/* ── Body ── */}
+        {/* "" Body "" */}
         <p
           style={{
             textAlign:  "center",
@@ -155,7 +155,7 @@ export function FaceViolationModal({
           )}
         </p>
 
-        {/* ── Progress bars — same pattern as TabSwitchWarningModal ── */}
+        {/* "" Progress bars " same pattern as TabSwitchWarningModal "" */}
         <div style={{ display: "flex", gap: "8px", marginBottom: "20px" }}>
           {[1, 2].map((n) => (
             <div
@@ -174,7 +174,7 @@ export function FaceViolationModal({
           ))}
         </div>
 
-        {/* ── Countdown — only on first violation ── */}
+        {/* "" Countdown " only on first violation "" */}
         {!isTerminal && (
           <div style={{ marginBottom: "20px" }}>
             <div
@@ -220,7 +220,7 @@ export function FaceViolationModal({
           </div>
         )}
 
-        {/* ── Button ── */}
+        {/* "" Button "" */}
         <button
           onClick={onDismiss}
           style={{
@@ -237,7 +237,7 @@ export function FaceViolationModal({
             cursor:       "pointer",
           }}
         >
-          {isTerminal ? "View Results" : "I Fixed It — Check Again"}
+          {isTerminal ? "View Results" : "I Fixed It - Check Again"}
         </button>
       </div>
     </div>

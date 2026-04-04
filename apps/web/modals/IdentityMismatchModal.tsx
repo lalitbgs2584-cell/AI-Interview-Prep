@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 /**
  * ============================================================================
  * IdentityMismatchModal Component
@@ -126,7 +126,7 @@ export function IdentityMismatchModal({
           }}
         >
           {isTerminal
-            ? "Identity Violation — Session Terminated"
+            ? "Identity Violation - Session Terminated"
             : "Different Person Detected"}
         </h2>
 
@@ -249,7 +249,7 @@ export function IdentityMismatchModal({
             cursor: "pointer",
           }}
         >
-          {isTerminal ? "View Results" : "It's Me — Verify Again"}
+          {isTerminal ? "View Results" : "It's Me - Verify Again"}
         </button>
       </div>
     </div>

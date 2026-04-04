@@ -1,9 +1,9 @@
-"use client";
+﻿"use client";
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// """ Types """""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 type InterviewType = "TECHNICAL" | "HR" | "SYSTEM_DESIGN" | "BEHAVIORAL";
 type Difficulty    = "easy" | "medium" | "hard";
@@ -13,7 +13,7 @@ interface Props {
   onClose: () => void;
 }
 
-// ─── Static data ──────────────────────────────────────────────────────────────
+// """ Static data """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 const INTERVIEW_TYPES: { value: InterviewType; label: string; desc: string }[] = [
   { value: "TECHNICAL",     label: "Technical",     desc: "DSA, coding, algorithms" },
@@ -65,7 +65,7 @@ const TOPIC_SUGGESTIONS: Record<InterviewType, string[]> = {
   ],
 };
 
-// ─── Description builder ──────────────────────────────────────────────────────
+// """ Description builder """"""""""""""""""""""""""""""""""""""""""""""""""""""
 //
 // The Python node reads state.description and looks for a machine-readable
 // config block packed at the front, followed by human-readable context.
@@ -106,7 +106,7 @@ function buildDescription(
   return parts.join("\n\n");
 }
 
-// ─── Modal ────────────────────────────────────────────────────────────────────
+// """ Modal """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 export default function CustomSessionModal({ isOpen, onClose }: Props) {
   const router = useRouter();
@@ -163,10 +163,10 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
           credentials: "include",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            // ── Maps directly to InterviewState fields ─────────────────────
-            interviewTitle: title.trim(),   // → state.role
-            interviewType:  type,           // → state.interview_type
-            description,                   // → state.description (carries config + context)
+            // "" Maps directly to InterviewState fields """""""""""""""""""""
+            interviewTitle: title.trim(),   // ' state.role
+            interviewType:  type,           // ' state.interview_type
+            description,                   // ' state.description (carries config + context)
           }),
         }
       );
@@ -196,16 +196,16 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
 
       <div className="csm-container" role="dialog" aria-modal="true" aria-label="Custom Session Setup">
 
-        {/* ── Header ── */}
+        {/* "" Header "" */}
         <div className="csm-header">
           <div>
             <div className="csm-title">Custom Session</div>
             <div className="csm-subtitle">Configure your interview practice</div>
           </div>
-          <button className="csm-close" onClick={onClose} aria-label="Close">✕</button>
+          <button className="csm-close" onClick={onClose} aria-label="Close">-</button>
         </div>
 
-        {/* ── Step indicators ── */}
+        {/* "" Step indicators "" */}
         <div className="csm-steps" role="list" aria-label="Steps">
           {(["Setup", "Topics", "Job Description"] as const).map((label, idx) => {
             const n = idx + 1 as 1 | 2 | 3;
@@ -221,10 +221,10 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
           })}
         </div>
 
-        {/* ── Body ── */}
+        {/* "" Body "" */}
         <div className="csm-body">
 
-          {/* ────────────── Step 1: Setup ────────────── */}
+          {/* """""""""""""" Step 1: Setup """""""""""""" */}
           {step === 1 && (
             <div className="csm-step-content">
 
@@ -293,13 +293,13 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
             </div>
           )}
 
-          {/* ────────────── Step 2: Topics ────────────── */}
+          {/* """""""""""""" Step 2: Topics """""""""""""" */}
           {step === 2 && (
             <div className="csm-step-content">
 
               <div className="csm-field">
                 <label className="csm-label">
-                  Focus Topics <span className="csm-optional">(optional — helps AI prioritise)</span>
+                  Focus Topics <span className="csm-optional">(optional " helps AI prioritise)</span>
                 </label>
                 <div className="csm-chips">
                   {suggestions.map((t) => (
@@ -319,7 +319,7 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
                 <div style={{ display: "flex", gap: "8px" }}>
                   <input
                     className="csm-input"
-                    placeholder="e.g. Kafka, Redis, Segment Trees…"
+                    placeholder="e.g. Kafka, Redis, Segment Trees"
                     value={customTopic}
                     onChange={(e) => setCustomTopic(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && addCustomTopic()}
@@ -347,7 +347,7 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
                         style={{ display: "flex", alignItems: "center", gap: "5px" }}
                       >
                         {t}
-                        <span style={{ opacity: 0.5, fontSize: "0.65rem" }}>✕</span>
+                        <span style={{ opacity: 0.5, fontSize: "0.65rem" }}>-</span>
                       </button>
                     ))}
                   </div>
@@ -360,7 +360,7 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
                 </label>
                 <textarea
                   className="csm-textarea"
-                  placeholder="Weak points, specific areas to focus on, anything the AI should know about you…"
+                  placeholder="Weak points, specific areas to focus on, anything the AI should know about you"
                   rows={3}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
@@ -369,7 +369,7 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
             </div>
           )}
 
-          {/* ────────────── Step 3: JD + Review ────────────── */}
+          {/* """""""""""""" Step 3: JD + Review """""""""""""" */}
           {step === 3 && (
             <div className="csm-step-content">
 
@@ -382,7 +382,7 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
                 </p>
                 <textarea
                   className="csm-textarea"
-                  placeholder="Paste the full job description here…"
+                  placeholder="Paste the full job description here"
                   rows={6}
                   value={jdText}
                   onChange={(e) => setJdText(e.target.value)}
@@ -407,7 +407,7 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
                            : difficulty === "hard" ? "#f87171"
                            : "#fbbf24",
                     }}>
-                      {difficulty ? difficulty.charAt(0).toUpperCase() + difficulty.slice(1) : "—"}
+                      {difficulty ? difficulty.charAt(0).toUpperCase() + difficulty.slice(1) : "Not set"}
                     </span>
                   </div>
                   <div className="csm-summary-row">
@@ -423,13 +423,13 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
                   {notes.trim() && (
                     <div className="csm-summary-row">
                       <span>Notes</span>
-                      <span style={{ color: "#4ade80" }}>✓ Added</span>
+                      <span style={{ color: "#4ade80" }}>" Added</span>
                     </div>
                   )}
                   {jdText.trim() && (
                     <div className="csm-summary-row">
                       <span>Job Description</span>
-                      <span style={{ color: "#4ade80" }}>✓ Added</span>
+                      <span style={{ color: "#4ade80" }}>" Added</span>
                     </div>
                   )}
                 </div>
@@ -440,7 +440,7 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
           )}
         </div>
 
-        {/* ── Footer ── */}
+        {/* "" Footer "" */}
         <div className="csm-footer">
           {step > 1 && (
             <button
@@ -448,7 +448,7 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
               onClick={() => setStep((s) => (s - 1) as 1 | 2 | 3)}
               disabled={loading}
             >
-              ← Back
+               Back
             </button>
           )}
           {step < 3 ? (
@@ -457,7 +457,7 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
               disabled={step === 1 ? !canNext : false}
               onClick={() => setStep((s) => (s + 1) as 1 | 2 | 3)}
             >
-              Next →
+              Next '
             </button>
           ) : (
             <button
@@ -471,10 +471,10 @@ export default function CustomSessionModal({ isOpen, onClose }: Props) {
                     <circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.3)" strokeWidth="3"/>
                     <path d="M12 2a10 10 0 0110 10" stroke="#fff" strokeWidth="3" strokeLinecap="round"/>
                   </svg>
-                  Starting…
+                  Starting
                   <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
                 </span>
-              ) : "Start Session →"}
+              ) : "Start Session '"}
             </button>
           )}
         </div>

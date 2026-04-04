@@ -1,11 +1,11 @@
-/* ══════════════════════════════════════
-   pages.css  —  Page-Specific Styles
-   (Resume · Interviews · Progress · History)
-══════════════════════════════════════ */
+/* --------------------------------------
+   pages.css  "  Page-Specific Styles
+   (Resume - Interviews - Progress - History)
+-------------------------------------- */
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    RESUME PAGE
-══════════════════════════════════════ */
+-------------------------------------- */
 .resume-upload-zone {
   border: 2px dashed var(--border-strong);
   border-radius: var(--r-xl);
@@ -92,9 +92,9 @@
 }
 .resume-action-btn.primary:hover { opacity: 0.88; transform: translateY(-2px); }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    INTERVIEWS PAGE
-══════════════════════════════════════ */
+-------------------------------------- */
 .interview-type-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
 
 .interview-type-card {
@@ -116,9 +116,9 @@
 .interview-type-meta  { display: flex; align-items: center; justify-content: space-between; margin-top: 1rem; }
 .interview-type-count { font-family: var(--ff-mono); font-size: 0.68rem; color: var(--muted); }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    PROGRESS PAGE
-══════════════════════════════════════ */
+-------------------------------------- */
 .progress-chart-placeholder {
   height: 180px;
   border-radius: var(--r-lg);
@@ -138,9 +138,9 @@
 .milestone-label { font-size: 0.85rem; font-weight: 600; color: var(--text); }
 .milestone-sub   { font-family: var(--ff-mono); font-size: 0.68rem; color: var(--muted); }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    HISTORY PAGE
-══════════════════════════════════════ */
+-------------------------------------- */
 .history-filter-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .history-filter-btn {
   padding: 0.35rem 0.9rem;

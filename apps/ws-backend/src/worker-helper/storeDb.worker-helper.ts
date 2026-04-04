@@ -22,7 +22,7 @@ export const storeToDB = async (payload: any) => {
 
     try {
 
-        // ❌ If parsing failed → mark file failed & exit
+        //  If parsing failed ' mark file failed & exit
         if (error) {
             await prisma.file.update({
                 where: { id: fileId },
@@ -31,7 +31,7 @@ export const storeToDB = async (payload: any) => {
             return { success: false, message: "Resume Processing Failed" };
         }
 
-        // ✅ Mark file processed outside transaction (reduces lock time)
+        // ... Mark file processed outside transaction (reduces lock time)
         await prisma.file.update({
             where: { id: fileId },
             data: { status: "PROCESSED" },
@@ -40,7 +40,7 @@ export const storeToDB = async (payload: any) => {
         await prisma.$transaction(
             async (tx) => {
 
-                // ── 1. Skills: clear old mapping → upsert global skills → remap ──
+                // "" 1. Skills: clear old mapping ' upsert global skills ' remap ""
                 await tx.userSkill.deleteMany({ where: { userId } });
 
                 const upsertedSkills = await Promise.all(
@@ -60,11 +60,11 @@ export const storeToDB = async (payload: any) => {
                     });
                 }
 
-                // ── 2. Resume upsert ──────────────────────────────────────────────
+                // "" 2. Resume upsert """"""""""""""""""""""""""""""""""""""""""""""
                 const resume = await tx.resume.upsert({
                     where: { userId },
 
-                    /* ── CREATE ── */
+                    /* "" CREATE "" */
                     create: {
                         neo4jNodeId,
                         qdrantPointIds: Array.isArray(qdrantPointIds) ? qdrantPointIds : [],
@@ -110,7 +110,7 @@ export const storeToDB = async (payload: any) => {
                         },
                     },
 
-                    /* ── UPDATE ── */
+                    /* "" UPDATE "" */
                     update: {
                         fileId,
                         neo4jNodeId,
@@ -162,7 +162,7 @@ export const storeToDB = async (payload: any) => {
                     select: { id: true },
                 });
 
-                // ── 3. Insights upsert (keyed on resumeId) ───────────────────────
+                // "" 3. Insights upsert (keyed on resumeId) """""""""""""""""""""""
                 await tx.insights.upsert({
                     where: { resumeId: resume.id },
                     create: {

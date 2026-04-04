@@ -23,7 +23,7 @@ export default function SignUpPage() {
         password,
       });
       if (error) { alert(error.message); return; }
-      // ✅ After signup, sign them in immediately
+      // ... After signup, sign them in immediately
       const { error: signInError } = await authClient.signIn.email({
         email,
         password,
@@ -70,7 +70,7 @@ export default function SignUpPage() {
           <Link href="/" className="left-logo">Interview<span>AI</span></Link>
           <div className="left-hero">
             <h2>Start your journey<br />to the <em>perfect offer</em></h2>
-            <p>Create your account and get personalized mock interviews, real-time feedback, and memory-driven coaching — all powered by AI.</p>
+            <p>Create your account and get personalized mock interviews, real-time feedback, and memory-driven coaching " all powered by AI.</p>
           </div>
         </div>
 
@@ -79,7 +79,7 @@ export default function SignUpPage() {
             <h1 className="form-title">Create account</h1>
             <p className="form-sub">
               Already have one?{" "}
-              <Link href="/login">Sign in instead →</Link>
+              <Link href="/login">Sign in instead '</Link>
             </p>
 
             {fields.map((f) => (
@@ -102,7 +102,7 @@ export default function SignUpPage() {
 
             <button className="btn-primary" onClick={handleEmailSignUp} disabled={loading}>
               {loading && <span className="spinner" />}
-              {loading ? "Creating account…" : "Create account →"}
+              {loading ? "Creating account" : "Create account '"}
             </button>
 
             <div className="divider">or continue with</div>

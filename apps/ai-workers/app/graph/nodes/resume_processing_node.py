@@ -13,6 +13,13 @@ from app.core.s3_client import download_resume
 from app.system_prompts.structure_node_prompts import structure_node_prompt
 from app.system_prompts.ats_score_prompt import ats_score_prompt
 from app.core.config import settings
+from app.core.token_budget import (
+    BudgetExceededError,
+    check_budget,
+    estimate_tokens,
+    extract_total_tokens,
+    increment_usage,
+)
 from app.graph.state.resume_processing_state import ResumeProcessState
 from app.workers.convert_pdf_to_image_worker import ocr_images_with_openai
 import fitz, json, re, uuid
@@ -35,6 +42,8 @@ embedder = OpenAIEmbeddings(
 qdrant_client = QdrantClient(url=settings.QDRANT_URI)
 QDRANT_COLLECTION = "resumes"
 EMBEDDING_DIM = 3072
+LLM_MODEL = "gpt-4o"
+EMBEDDING_MODEL = "text-embedding-3-large"
 
 neo4j_driver = GraphDatabase.driver(
     settings.NEO4J_URI,
@@ -58,7 +67,7 @@ def _ensure_qdrant_collection():
 # =========================
 # Nodes
 #
-# ✅ GOLDEN RULE: every node returns ONLY the keys it writes.
+# ... GOLDEN RULE: every node returns ONLY the keys it writes.
 #    NEVER do {**state, "key": value}.
 #    Spreading **state re-writes every existing key, which causes
 #    INVALID_CONCURRENT_GRAPH_UPDATE when parallel branches run simultaneously.
@@ -108,7 +117,7 @@ def ocr_node(state: ResumeProcessState):
     print("OCR Node Started")
     try:
         page_images = state.get("page_images", [])
-        text = ocr_images_with_openai(page_images)
+        text = ocr_images_with_openai(page_images, state["user_id"])
         print("OCR text preview:", text[:300])
         return {"raw_text": text}
     except Exception as e:
@@ -141,7 +150,13 @@ def structured_node(state: ResumeProcessState):
             return {"error": "cleaned_text is empty"}
 
         prompt = structure_node_prompt(cleaned_text)
+        check_budget(state["user_id"], LLM_MODEL)
         response = llm.invoke(prompt)
+        increment_usage(
+            state["user_id"],
+            LLM_MODEL,
+            extract_total_tokens(response, estimate_tokens(cleaned_text)),
+        )
         raw_content = response.content.strip()
         raw_content = re.sub(r"^```json|^```|```$", "", raw_content, flags=re.MULTILINE).strip()
         data = json.loads(raw_content)
@@ -170,7 +185,7 @@ def structured_node(state: ResumeProcessState):
 def ats_score_checker(state: ResumeProcessState):
     """
     Scores the resume against ATS criteria using cleaned_text and structured data.
-    Returns only 'ats_score' (0–100).
+    Returns only 'ats_score' (0"100).
     """
     print("ATS Score Node Started")
     try:
@@ -185,7 +200,7 @@ def ats_score_checker(state: ResumeProcessState):
         strong_domains   = state.get("strong_domains", [])
 
         if not cleaned_text:
-            return {"error": "cleaned_text is empty — cannot compute ATS score"}
+            return {"error": "cleaned_text is empty " cannot compute ATS score"}
 
         prompt = ats_score_prompt(
             cleaned_text=cleaned_text,
@@ -199,13 +214,19 @@ def ats_score_checker(state: ResumeProcessState):
             projects=projects
             )
 
+        check_budget(state["user_id"], LLM_MODEL)
         response = llm.invoke(prompt)
+        increment_usage(
+            state["user_id"],
+            LLM_MODEL,
+            extract_total_tokens(response, estimate_tokens(cleaned_text, skills, projects)),
+        )
         raw_content = response.content.strip()
         raw_content = re.sub(r"^```json|^```|```$", "", raw_content, flags=re.MULTILINE).strip()
         data = json.loads(raw_content)
 
         total_score = int(data.get("total_score", 0))
-        # Clamp to 0–100 as a safety net
+        # Clamp to 0"100 as a safety net
         total_score = max(0, min(100, total_score))
 
         print(f"ATS Score: {total_score}")
@@ -248,7 +269,10 @@ def embedding_node(state: ResumeProcessState):
     """
     print("Embedding Node Started")
     try:
+        check_budget(state["user_id"], EMBEDDING_MODEL)
         embeddings = embedder.embed_documents(state["text_chunks"])
+        estimated_tokens = sum(estimate_tokens(chunk) for chunk in state["text_chunks"])
+        increment_usage(state["user_id"], EMBEDDING_MODEL, estimated_tokens)
         print(f"Generated {len(embeddings)} embeddings, dim={len(embeddings[0])}")
         return {"chunk_embeddings": embeddings}
     except Exception as e:
@@ -258,7 +282,7 @@ def embedding_node(state: ResumeProcessState):
 def store_neo4j_node(state: ResumeProcessState):
     """
     Stores structured resume data as a graph in Neo4j.
-    Uses user_id as the central Candidate node — one node per user,
+    Uses user_id as the central Candidate node " one node per user,
     updated on every re-upload rather than creating duplicates.
 
     Strategy on re-upload:
@@ -290,7 +314,7 @@ def store_neo4j_node(state: ResumeProcessState):
 
         with neo4j_driver.session() as session:
 
-            # ── 1. Candidate node (MERGE — one per user) ──────────────────
+            # "" 1. Candidate node (MERGE " one per user) """"""""""""""""""
             result = session.run(
                 """
                 MERGE (c:Candidate {user_id: $user_id})
@@ -313,9 +337,9 @@ def store_neo4j_node(state: ResumeProcessState):
             )
             node_ids["candidate"] = result.single()["node_id"]
 
-            # ── 2. Purge stale child nodes before recreating ──────────────
+            # "" 2. Purge stale child nodes before recreating """"""""""""""
             # Skills are global nodes (not owned by one candidate), so we
-            # only detach the relationships — never delete the Skill nodes.
+            # only detach the relationships " never delete the Skill nodes.
             session.run(
                 """
                 MATCH (c:Candidate {user_id: $user_id})
@@ -337,7 +361,7 @@ def store_neo4j_node(state: ResumeProcessState):
                 user_id=user_id,
             )
 
-            # ── 3. Skills (MERGE globally, MERGE relationship) ────────────
+            # "" 3. Skills (MERGE globally, MERGE relationship) """"""""""""
             for skill in state.get("skills", []):
                 result = session.run(
                     """
@@ -354,7 +378,7 @@ def store_neo4j_node(state: ResumeProcessState):
                 if row:
                     node_ids["skills"].append(row["node_id"])
 
-            # ── 4. Education ──────────────────────────────────────────────
+            # "" 4. Education """"""""""""""""""""""""""""""""""""""""""""""
             for edu in state.get("education", []):
                 result = session.run(
                     """
@@ -378,7 +402,7 @@ def store_neo4j_node(state: ResumeProcessState):
                 if row:
                     node_ids["education"].append(row["node_id"])
 
-            # ── 5. Work Experience ────────────────────────────────────────
+            # "" 5. Work Experience """"""""""""""""""""""""""""""""""""""""
             for exp in state.get("work_experience", []):
                 result = session.run(
                     """
@@ -402,7 +426,7 @@ def store_neo4j_node(state: ResumeProcessState):
                 if row:
                     node_ids["work_experience"].append(row["node_id"])
 
-            # ── 6. Projects ───────────────────────────────────────────────
+            # "" 6. Projects """""""""""""""""""""""""""""""""""""""""""""""
             for proj in state.get("projects", []):
                 result = session.run(
                     """
@@ -424,7 +448,7 @@ def store_neo4j_node(state: ResumeProcessState):
                 if row:
                     node_ids["projects"].append(row["node_id"])
 
-            # ── 7. Extracurricular ────────────────────────────────────────
+            # "" 7. Extracurricular """"""""""""""""""""""""""""""""""""""""
             for extra in state.get("extracurricular", []):
                 result = session.run(
                     """

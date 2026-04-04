@@ -1,10 +1,10 @@
-"use client";
+﻿"use client";
 
 import { useMemo, useState, useEffect } from "react";
 
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 // Types derived directly from Prisma schema
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 type InterviewType = "TECHNICAL" | "HR" | "SYSTEM_DESIGN" | "BEHAVIORAL";
 type InterviewStatus = "CREATED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
 type Difficulty = "EASY" | "MEDIUM" | "HARD";
@@ -12,7 +12,7 @@ type UserRole = "USER" | "ADMIN";
 
 interface Evaluation {
     overallScore?: number | null;
-    overallScore100?: number | null;  // ← 0-100 scale (PRIMARY)
+    overallScore100?: number | null;  //  0-100 scale (PRIMARY)
     clarity?: number | null;
     technical?: number | null;
     confidence?: number | null;
@@ -77,11 +77,11 @@ export interface ProfilePageProps {
     };
 }
 
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 // Pure helpers
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 function formatDate(date?: Date | string | null, opts?: Intl.DateTimeFormatOptions): string {
-    if (!date) return "—";
+    if (!date) return "";
     return new Date(date).toLocaleDateString("en-US", opts ?? { month: "long", year: "numeric" });
 }
 
@@ -115,9 +115,9 @@ function scoreColor(n: number) {
     return "var(--rose)";
 }
 
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 // Normalize evaluation scores (0-100 scale)
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 function normalizeScore(ev: Evaluation | null | undefined): number {
     if (!ev) return 0;
     // Use overallScore100 (0-100) if available, otherwise convert overallScore (0-10)
@@ -131,10 +131,10 @@ function normalizeScore(ev: Evaluation | null | undefined): number {
 }
 
 const TYPE_META: Record<InterviewType, { icon: string; label: string }> = {
-    TECHNICAL: { icon: "⚙️", label: "Technical" },
-    HR: { icon: "🤝", label: "HR" },
-    SYSTEM_DESIGN: { icon: "🏗️", label: "System Design" },
-    BEHAVIORAL: { icon: "🧠", label: "Behavioral" },
+    TECHNICAL: { icon: "", label: "Technical" },
+    HR: { icon: "", label: "HR" },
+    SYSTEM_DESIGN: { icon: "-", label: "System Design" },
+    BEHAVIORAL: { icon: " ", label: "Behavioral" },
 };
 
 const DIFF_META: Record<Difficulty, { label: string; color: string }> = {
@@ -143,16 +143,16 @@ const DIFF_META: Record<Difficulty, { label: string; color: string }> = {
     HARD: { label: "Hard", color: "var(--rose)" },
 };
 
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 // Level system
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 const LEVELS = [
-    { name: "Beginner", icon: "🌱", min: 0, max: 5 },
-    { name: "Apprentice", icon: "📘", min: 5, max: 15 },
-    { name: "Intermediate", icon: "⚙️", min: 15, max: 30 },
-    { name: "Advanced", icon: "🔬", min: 30, max: 60 },
-    { name: "Expert", icon: "🚀", min: 60, max: 100 },
-    { name: "Legend", icon: "👑", min: 100, max: 100 },
+    { name: "Beginner", icon: "BG", min: 0, max: 5 },
+    { name: "Apprentice", icon: "AP", min: 5, max: 15 },
+    { name: "Intermediate", icon: "IN", min: 15, max: 30 },
+    { name: "Advanced", icon: "AD", min: 30, max: 60 },
+    { name: "Expert", icon: "EX", min: 60, max: 100 },
+    { name: "Legend", icon: "LG", min: 100, max: 100 },
 ];
 
 function getLevel(n: number) {
@@ -162,9 +162,9 @@ function getLevel(n: number) {
     return { ...lv, xp, range, pct: Math.min((xp / range) * 100, 100) };
 }
 
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 // Heatmap helpers
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 function buildHeatmap(activityMap: Record<string, number>) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -210,17 +210,17 @@ function buildWeekDays(activityMap: Record<string, number>) {
 }
 
 const MILESTONES = [
-    { days: 3, icon: "🔥", label: "3-day" },
-    { days: 7, icon: "⚡", label: "1-week" },
-    { days: 14, icon: "💪", label: "2-week" },
-    { days: 30, icon: "🏆", label: "1-month" },
-    { days: 60, icon: "💎", label: "2-month" },
-    { days: 100, icon: "👑", label: "100-day" },
+    { days: 3, icon: "3D", label: "3-day" },
+    { days: 7, icon: "1W", label: "1-week" },
+    { days: 14, icon: "2W", label: "2-week" },
+    { days: 30, icon: "1M", label: "1-month" },
+    { days: 60, icon: "2M", label: "2-month" },
+    { days: 100, icon: "100", label: "100-day" },
 ];
 
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 // Sub-components
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 
 function StatPill({ value, label, color }: { value: string | number; label: string; color?: string }) {
     return (
@@ -252,7 +252,7 @@ function InterviewRow({ iv }: { iv: Interview }) {
         <div className="session-row">
             <div className="session-row-left">
                 <div className={`session-score-badge ${completed ? scoreClass(sessionScore) : "score-medium"}`}>
-                    {completed ? sessionScore || "—" : <span style={{ fontSize: "1rem" }}>⏳</span>}
+                    {completed ? sessionScore || "--" : <span style={{ fontSize: "1rem" }}>--</span>}
                 </div>
                 <div>
                     <div className="session-title">{iv.title}</div>
@@ -296,9 +296,9 @@ function EvalBreakdown({ ev }: { ev: Evaluation }) {
     );
 }
 
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 // Loading & Error states
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 function LoadingState() {
     return (
         <div style={{
@@ -309,7 +309,7 @@ function LoadingState() {
             fontSize: "1rem",
             color: "var(--text-2)",
         }}>
-            ⏳ Loading profile...
+             Loading profile...
         </div>
     );
 }
@@ -325,7 +325,7 @@ function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) 
             gap: "1rem",
         }}>
             <div style={{ color: "var(--rose)", fontSize: "1rem" }}>
-                ⚠️ Error: {error}
+                  Error: {error}
             </div>
             <button
                 onClick={onRetry}
@@ -344,11 +344,11 @@ function ErrorState({ error, onRetry }: { error: string; onRetry: () => void }) 
     );
 }
 
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 // Main component
-// ─────────────────────────────────────────────
+// """""""""""""""""""""""""""""""""""""""""""""
 export default function ProfilePage() {
-    // ⚠️ ALL HOOKS MUST BE AT THE TOP - BEFORE ANY CONDITIONALS
+    //   ALL HOOKS MUST BE AT THE TOP - BEFORE ANY CONDITIONALS
     const [activeTab, setActiveTab] = useState<"overview" | "interviews" | "resume" | "skills">("overview");
     const [profileData, setProfileData] = useState<ProfilePageProps["user"] | null>(null);
     const [isLoading, setIsLoading] = useState(true);
@@ -402,7 +402,7 @@ export default function ProfilePage() {
         fetchProfile();
     };
 
-    // ⚠️ MEMOS MUST BE HERE - UNCONDITIONALLY
+    //   MEMOS MUST BE HERE - UNCONDITIONALLY
     // Use empty defaults if profileData is null to avoid hook issues
     const user = profileData || {};
     const {
@@ -490,7 +490,7 @@ export default function ProfilePage() {
 
     return (
         <div className="profile-full-page">
-            {/* ── Hero ── */}
+            {/* "" Hero "" */}
             <div className="profile-hero-card">
                 <div className="profile-hero-bg" />
                 <div className="profile-hero-inner">
@@ -506,26 +506,26 @@ export default function ProfilePage() {
                     <div className="profile-hero-identity">
                         <div className="profile-name">{name ?? "Guest"}</div>
                         <div className="profile-role">
-                            {role === "ADMIN" ? "👑 Admin" : "Software Engineer"} · {level.icon} {level.name}
+                            {role === "ADMIN" ? "'' Admin" : "Software Engineer"} - {level.icon} {level.name}
                         </div>
                         {email && <div className="profile-email">{email}</div>}
                         <div className="profile-join-badge">
-                            📅 Joined {formatDate(createdAt)} · Last seen {timeAgo(lastLoginAt)}
+                            Joined {formatDate(createdAt)} - Last seen {timeAgo(lastLoginAt)}
                         </div>
                     </div>
 
                     {/* Stats */}
                     <div className="profile-hero-stats">
-                        <StatPill value={streak} label="🔥 Streak" color={streak >= 7 ? "var(--accent)" : undefined} />
-                        <StatPill value={completedCount} label="✅ Done" />
-                        <StatPill value={avgScore || "—"} label="⭐ Avg Score" color={avgScore ? scoreColor(avgScore) : undefined} />
-                        <StatPill value={bestStreak} label="🏆 Best" />
-                        {insights && <StatPill value={insights.ATSSCORE} label="📄 ATS" color={scoreColor(insights.ATSSCORE)} />}
+                        <StatPill value={streak} label="Day Streak" color={streak >= 7 ? "var(--accent)" : undefined} />
+                        <StatPill value={completedCount} label="Completed" />
+                        <StatPill value={avgScore || "--"} label="Avg Score" color={avgScore ? scoreColor(avgScore) : undefined} />
+                        <StatPill value={bestStreak} label="Best Streak" />
+                        {insights && <StatPill value={insights.ATSSCORE} label="ATS Score" color={scoreColor(insights.ATSSCORE)} />}
                     </div>
                 </div>
             </div>
 
-            {/* ══════════════════ OVERVIEW TAB ══════════════════ */}
+            {/* ------------------ OVERVIEW TAB ------------------ */}
             {activeTab === "overview" && (
                 <div className="profile-grid">
                     {/* LEFT COL */}
@@ -556,7 +556,7 @@ export default function ProfilePage() {
                             {/* Header row */}
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "1rem" }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                                    <span style={{ fontSize: "2rem", lineHeight: 1 }}>🔥</span>
+                                    <span style={{ fontSize: "2rem", lineHeight: 1 }}>"</span>
                                     <div>
                                         <div style={{ fontSize: "2rem", fontWeight: 700, color: "var(--text)", lineHeight: 1 }}>{streak}</div>
                                         <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "2px" }}>day streak</div>
@@ -571,7 +571,7 @@ export default function ProfilePage() {
                                 </div>
                             </div>
 
-                            {/* Status banner — driven by whether session was done today */}
+                            {/* Status banner " driven by whether session was done today */}
                             {(() => {
                                 const todayIso = new Date().toISOString().slice(0, 10);
                                 const doneToday = (activityMap[todayIso] ?? 0) > 0;
@@ -588,13 +588,13 @@ export default function ProfilePage() {
                                 if (lost) return (
                                     <div style={bannerStyle("rgba(255,77,109,0.08)", "rgba(255,77,109,0.3)", "var(--rose)")}>
                                         <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--rose)", flexShrink: 0, display: "inline-block" }} />
-                                        Streak lost — start a new one today!
+                                        Streak lost " start a new one today!
                                     </div>
                                 );
                                 if (doneToday) return (
                                     <div style={bannerStyle("rgba(72,199,142,0.08)", "rgba(72,199,142,0.3)", "var(--positive)")}>
                                         <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--positive)", flexShrink: 0, display: "inline-block" }} />
-                                        Completed today — streak safe!
+                                        Completed today " streak safe!
                                     </div>
                                 );
                                 return (
@@ -623,8 +623,8 @@ export default function ProfilePage() {
                                         <div key={d.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5 }}>
                                             <span style={{ fontSize: "0.6rem", color: "var(--muted)", letterSpacing: "0.03em" }}>{d.label}</span>
                                             <div style={dot}>
-                                                {d.done && <span style={{ color: "var(--positive)", fontSize: "0.85rem" }}>✓</span>}
-                                                {!d.done && !d.isFuture && !d.isToday && <span style={{ color: "var(--rose)", fontSize: "0.75rem" }}>✕</span>}
+                                                {d.done && <span style={{ color: "var(--positive)", fontSize: "0.85rem" }}>"</span>}
+                                                {!d.done && !d.isFuture && !d.isToday && <span style={{ color: "var(--rose)", fontSize: "0.75rem" }}>-</span>}
                                                 {d.isToday && !d.done && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent-2)", display: "inline-block" }} />}
                                             </div>
                                         </div>
@@ -750,7 +750,7 @@ export default function ProfilePage() {
                                             <button onClick={() => canGoPrev && changeMonth(-1)}
                                                 disabled={!canGoPrev}
                                                 style={{ background: "none", border: "1px solid var(--border)", borderRadius: "var(--r-md)", width: 28, height: 28, cursor: canGoPrev ? "pointer" : "default", opacity: canGoPrev ? 1 : 0.3, color: "var(--text-2)", fontSize: "1rem", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                                ‹
+                                                
                                             </button>
                                             <div style={{ textAlign: "center" }}>
                                                 <div style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--text)" }}>{MONTHS[m]} {y}</div>
@@ -759,7 +759,7 @@ export default function ProfilePage() {
                                             <button onClick={() => canGoNext && changeMonth(1)}
                                                 disabled={!canGoNext}
                                                 style={{ background: "none", border: "1px solid var(--border)", borderRadius: "var(--r-md)", width: 28, height: 28, cursor: canGoNext ? "pointer" : "default", opacity: canGoNext ? 1 : 0.3, color: "var(--text-2)", fontSize: "1rem", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                                ›
+                                                
                                             </button>
                                         </div>
 
@@ -786,7 +786,7 @@ export default function ProfilePage() {
                                                     }}>
                                                         <span style={{ fontSize: "0.68rem", lineHeight: 1 }}>{c.day}</span>
                                                         {hasActivity && (
-                                                            <span style={{ fontSize: "0.65rem", color: "#BA7517", lineHeight: 1, marginTop: 1 }}>✔</span>
+                                                            <span style={{ fontSize: "0.65rem", color: "#BA7517", lineHeight: 1, marginTop: 1 }}>"</span>
                                                         )}
                                                         {hasActivity && c.count > 1 && (
                                                             <span style={{
@@ -893,7 +893,7 @@ export default function ProfilePage() {
                                         <div className="activity-item">
                                             <div className="activity-dot streak" />
                                             <div className="activity-content">
-                                                <div className="activity-title">🔥 {streak}-day streak active</div>
+                                                <div className="activity-title">" {streak}-day streak active</div>
                                                 <div className="activity-meta">Keep it going!</div>
                                             </div>
                                         </div>
@@ -914,16 +914,16 @@ export default function ProfilePage() {
                 </div>
             )}
 
-            {/* ══════════════════ INTERVIEWS TAB ══════════════════ */}
+            {/* ------------------ INTERVIEWS TAB ------------------ */}
             {activeTab === "interviews" && (
                 <div className="profile-grid">
                     <div className="profile-col">
                         {/* Quick stat row */}
                         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "0.75rem" }}>
                             {[
-                                { label: "Total", value: totalInterviews, icon: "🎙️" },
-                                { label: "Completed", value: completedCount, icon: "✅" },
-                                { label: "In Progress", value: interviews.filter((i) => i.status === "IN_PROGRESS").length, icon: "⏳" },
+                                { label: "Total", value: totalInterviews, icon: "" },
+                                { label: "Completed", value: completedCount, icon: "..." },
+                                { label: "In Progress", value: interviews.filter((i) => i.status === "IN_PROGRESS").length, icon: "" },
                             ].map((s) => (
                                 <div key={s.label} className="dash-stat-card">
                                     <div className="dash-stat-top">
@@ -973,12 +973,12 @@ export default function ProfilePage() {
                                     )}
                                     {latestEvals[0]?.strengths && (
                                         <div style={{ marginTop: "0.75rem", padding: "0.75rem 1rem", background: "rgba(226,168,75,0.06)", border: "1px solid rgba(226,168,75,0.18)", borderRadius: "var(--r-md)", fontSize: "0.82rem", color: "var(--positive)", lineHeight: 1.6 }}>
-                                            <strong>💪 Strengths:</strong> {Array.isArray(latestEvals[0].strengths) ? latestEvals[0].strengths.join(", ") : latestEvals[0].strengths}
+                                            <strong>' Strengths:</strong> {Array.isArray(latestEvals[0].strengths) ? latestEvals[0].strengths.join(", ") : latestEvals[0].strengths}
                                         </div>
                                     )}
                                     {latestEvals[0]?.improvements && (
                                         <div style={{ marginTop: "0.75rem", padding: "0.75rem 1rem", background: "rgba(255,77,109,0.06)", border: "1px solid rgba(255,77,109,0.18)", borderRadius: "var(--r-md)", fontSize: "0.82rem", color: "var(--rose)", lineHeight: 1.6 }}>
-                                            <strong>🎯 Improve:</strong> {Array.isArray(latestEvals[0].improvements) ? latestEvals[0].improvements.join(", ") : latestEvals[0].improvements}
+                                            <strong> Improve:</strong> {Array.isArray(latestEvals[0].improvements) ? latestEvals[0].improvements.join(", ") : latestEvals[0].improvements}
                                         </div>
                                     )}
                                 </CardSection>

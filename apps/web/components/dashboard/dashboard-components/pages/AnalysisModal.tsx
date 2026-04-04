@@ -160,7 +160,7 @@ export function AnalysisModal({ open, onClose, insights }: {
               }}
               aria-label="Close"
             >
-              ✕
+              -
             </button>
           </div>
 
@@ -169,7 +169,7 @@ export function AnalysisModal({ open, onClose, insights }: {
             className="analysis-modal-scroll"
             style={{ overflowY: "auto", padding: "1.5rem", display: "flex", flexDirection: "column", gap: 0 }}
           >
-            {/* ATS Score + Experience — top row */}
+            {/* ATS Score + Experience " top row */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem", marginBottom: "1.5rem" }}>
 
               {/* ATS Arc */}
@@ -235,11 +235,11 @@ export function AnalysisModal({ open, onClose, insights }: {
               }}>
                 <div className="analysis-section-title">Experience</div>
                 <div style={{ fontSize: "1rem", fontWeight: 700, color: "var(--text, #fff)", lineHeight: 1.3 }}>
-                  {expLabel.split(" · ")[0]}
+                  {expLabel.split(" - ")[0]}
                 </div>
-                {expLabel.includes("·") && (
+                {expLabel.includes("-") && (
                   <div style={{ fontSize: "0.75rem", color: "var(--muted, #888)", fontFamily: "var(--ff-mono, monospace)" }}>
-                    {expLabel.split(" · ")[1]}
+                    {expLabel.split(" - ")[1]}
                   </div>
                 )}
                 <div style={{ marginTop: "auto", display: "flex", gap: 4 }}>
@@ -292,7 +292,7 @@ export function AnalysisModal({ open, onClose, insights }: {
                 <div className="analysis-section-title" style={{ marginBottom: "0.75rem" }}>Areas to Improve</div>
                 {insights.weakAreas.map((area, i) => (
                   <div key={i} className="analysis-weak-row">
-                    <span style={{ color: "#f76a6a", fontSize: "0.75rem", marginTop: "0.1rem", flexShrink: 0 }}>⚠</span>
+                    <span style={{ color: "#f76a6a", fontSize: "0.75rem", marginTop: "0.1rem", flexShrink: 0 }}> </span>
                     <span style={{ fontSize: "0.82rem", color: "var(--text-2, rgba(255,255,255,0.7))", lineHeight: 1.55 }}>
                       {area}
                     </span>

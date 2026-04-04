@@ -23,7 +23,7 @@ export default function SignInPage() {
         rememberMe: true,
       });
       if (error) { alert(error.message); return; }
-      // ✅ refresh flushes Next.js cache so session is picked up server-side
+      // ... refresh flushes Next.js cache so session is picked up server-side
       router.refresh();
       router.push("/dashboard");
     } catch (err) {
@@ -72,7 +72,7 @@ export default function SignInPage() {
             <h1 className="form-title">Login</h1>
             <p className="form-sub">
               Don't have one?{" "}
-              <Link href="/signup">Sign up instead →</Link>
+              <Link href="/signup">Sign up instead '</Link>
             </p>
 
             {fields.map((f) => (
@@ -95,7 +95,7 @@ export default function SignInPage() {
 
             <button className="btn-primary" onClick={handleEmailSignIn} disabled={loading}>
               {loading && <span className="spinner" />}
-              {loading ? "Logging in…" : "Sign In →"}
+              {loading ? "Logging in" : "Sign In '"}
             </button>
 
             <div className="divider">or continue with</div>

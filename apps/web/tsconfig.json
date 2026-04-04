@@ -1,7 +1,6 @@
 {
   "extends": "@workspace/typescript-config/nextjs.json",
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./*"],
       "@workspace/ui/*": ["../../packages/ui/src/*"]
@@ -16,10 +15,12 @@
   
   "include": [
     "next-env.d.ts",
+    "global.d.ts",
     "next.config.ts",
     "**/*.ts",
     "**/*.tsx",
-    ".next/types/**/*.ts"
-, "lib/hooks", "../../packages/ui/src/hooks/use-mobile.ts"  ],
+    ".next/types/**/*.ts",
+    "**/*.css",
+    "lib/hooks", "../../packages/ui/src/hooks/use-mobile.ts"  ],
   "exclude": ["node_modules"]
 }

@@ -1,17 +1,17 @@
-/* ══════════════════════════════════════
-   layout.css  —  Shell, Sidebar, Topbar
-══════════════════════════════════════ */
+/* --------------------------------------
+   layout.css  "  Shell, Sidebar, Topbar
+-------------------------------------- */
 
-/* ── Root grid ── */
+/* "" Root grid "" */
 .dash-root {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   min-height: 100vh;
 }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    MOBILE HAMBURGER
-══════════════════════════════════════ */
+-------------------------------------- */
 .mobile-menu-btn {
   display: none;
   position: fixed;
@@ -64,9 +64,9 @@
 }
 .sidebar-close-btn:hover { background: rgba(255,255,255,0.06); color: var(--text); }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    SIDEBAR
-══════════════════════════════════════ */
+-------------------------------------- */
 .sidebar {
   position: sticky;
   top: 0;
@@ -139,7 +139,7 @@
 .nav-pill.active .nav-pill-icon { color: var(--accent); }
 .nav-pill-icon { font-size: 1rem; width: 18px; text-align: center; flex-shrink: 0; }
 
-/* ── Sidebar tip ── */
+/* "" Sidebar tip "" */
 .sidebar-tip {
   margin: 1.5rem 0;
   background: rgba(255,92,53,0.05);
@@ -167,7 +167,7 @@
 }
 .sidebar-tip-btn:hover { opacity: 0.88; transform: translateY(-1px); }
 
-/* ── Sidebar user ── */
+/* "" Sidebar user "" */
 .sidebar-user {
   display: flex;
   align-items: center;
@@ -203,9 +203,9 @@
 .sidebar-user-role { font-size: 0.72rem; color: var(--muted); }
 .sidebar-user-hint { font-size: 0.65rem; color: var(--muted); margin-top: 1px; display: block; }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    MAIN CONTENT
-══════════════════════════════════════ */
+-------------------------------------- */
 .dash-main {
   padding: 2rem 2.5rem;
   display: flex;
@@ -214,7 +214,7 @@
   min-width: 0;
 }
 
-/* ── Top bar ── */
+/* "" Top bar "" */
 .dash-topbar {
   display: flex;
   align-items: flex-start;
@@ -306,7 +306,7 @@
 .btn-upload-resume:hover { border-color: rgba(255,92,53,0.4); color: var(--accent-2); background: var(--accent-low); transform: translateY(-1px); }
 .btn-upload-resume.has-file { border-color: rgba(255,92,53,0.35); background: rgba(255,92,53,0.07); color: var(--accent-2); }
 
-/* ── Misc helpers ── */
+/* "" Misc helpers "" */
 .tab-content { display: flex; flex-direction: column; gap: 1.25rem; }
 .mt-section  { margin-top: 0; }
 

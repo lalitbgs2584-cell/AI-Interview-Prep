@@ -1,10 +1,10 @@
-/* ══════════════════════════════════════
-   tokens.css  —  Design Tokens & Reset
-══════════════════════════════════════ */
+/* --------------------------------------
+   tokens.css  "  Design Tokens & Reset
+-------------------------------------- */
 
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500&display=swap');
 
-/* ── Reset ── */
+/* "" Reset "" */
 *,
 *::before,
 *::after {
@@ -13,7 +13,7 @@
   padding: 0;
 }
 
-/* ── Token map (also exposes HSL channels for profile page) ── */
+/* "" Token map (also exposes HSL channels for profile page) "" */
 :root {
   /* Surfaces */
   --bg:        #080b12;
@@ -84,7 +84,7 @@
   --sidebar-w: 240px;
 }
 
-/* ── Base body ── */
+/* "" Base body "" */
 body {
   background: var(--bg);
   color: var(--text);
@@ -100,7 +100,7 @@ body {
   background-size: 100% 100%, 100% 100%, 28px 28px;
 }
 
-/* ── Noise overlay ── */
+/* "" Noise overlay "" */
 .noise {
   position: fixed;
   inset: 0;

@@ -1,12 +1,12 @@
-/* ══════════════════════════════════════
-   profile.css  —  Profile Page
+/* --------------------------------------
+   profile.css  "  Profile Page
    Background fixes: all surfaces now use
    concrete rgba/var() values so nothing
    collapses to black on unsupported
    hsl(var(--channel)) fallback paths.
-══════════════════════════════════════ */
+-------------------------------------- */
 
-/* ── Page wrapper ── */
+/* "" Page wrapper "" */
 .profile-full-page {
   padding: 2rem 2.5rem;
   max-width: 1120px;
@@ -16,9 +16,9 @@
   gap: 1.75rem;
 }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    HERO CARD
-══════════════════════════════════════ */
+-------------------------------------- */
 .profile-hero-card {
   position: relative;
   border-radius: var(--r-lg);
@@ -33,7 +33,7 @@
   box-shadow: 0 0 60px rgba(255,92,53,0.08), var(--shadow-md);
 }
 
-/* Decorative glow mesh — always visible */
+/* Decorative glow mesh " always visible */
 .profile-hero-bg {
   position: absolute;
   inset: 0;
@@ -62,7 +62,7 @@
   flex-wrap: wrap;
 }
 
-/* ── Avatar ── */
+/* "" Avatar "" */
 .profile-avatar-wrap { position: relative; flex-shrink: 0; }
 .profile-avatar {
   width: 76px; height: 76px;
@@ -87,7 +87,7 @@
   animation: orbPulse 2.5s ease infinite;
 }
 
-/* ── Identity ── */
+/* "" Identity "" */
 .profile-hero-identity { flex: 1; min-width: 180px; }
 
 .profile-name {
@@ -114,7 +114,7 @@
   color: var(--text-3); letter-spacing: 0.03em;
 }
 
-/* ── Hero quick stats ── */
+/* "" Hero quick stats "" */
 .profile-hero-stats { display: flex; gap: 2rem; flex-shrink: 0; flex-wrap: wrap; }
 .profile-hero-stat  { text-align: center; min-width: 56px; }
 .profile-hero-stat-value {
@@ -129,9 +129,9 @@
   margin-top: 0.35rem;
 }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    GRID & GENERIC CARD
-══════════════════════════════════════ */
+-------------------------------------- */
 .profile-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -143,7 +143,7 @@
 .profile-card {
   border-radius: var(--r-lg);
   border: 1px solid var(--border);
-  /* Subtle tinted surface — never plain black */
+  /* Subtle tinted surface " never plain black */
   background:
     linear-gradient(135deg, rgba(255,92,53,0.025) 0%, rgba(167,139,250,0.02) 100%),
     var(--card);
@@ -165,9 +165,9 @@
 }
 .profile-card-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    LEVEL & XP
-══════════════════════════════════════ */
+-------------------------------------- */
 .level-badge-row {
   display: flex; align-items: center; gap: 1rem;
   padding: 1rem 1.25rem;
@@ -191,9 +191,9 @@
 .level-xp-fill  { height: 100%; border-radius: var(--r-full); background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.8s var(--ease-snap); }
 .level-xp-label { font-family: var(--ff-mono); font-size: 0.62rem; color: var(--muted); margin-top: 0.3rem; }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    LOGIN STREAK
-══════════════════════════════════════ */
+-------------------------------------- */
 .login-streak-banner {
   display: flex; align-items: center; gap: 1rem;
   padding: 1rem 1.25rem;
@@ -206,7 +206,7 @@
 .login-streak-title { font-size: 0.88rem; font-weight: 600; color: var(--text); line-height: 1.35; }
 .login-streak-sub   { font-family: var(--ff-mono); font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem; }
 
-/* ── Weekly pills ── */
+/* "" Weekly pills "" */
 .week-days-row  { display: flex; gap: 0.375rem; }
 .week-day-pill  { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 5px; }
 .week-day-label { font-family: var(--ff-mono); font-size: 0.56rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
@@ -228,7 +228,7 @@
   background: rgba(255,92,53,0.1);
 }
 
-/* ── Streak milestones ── */
+/* "" Streak milestones "" */
 .streak-milestones { display: flex; gap: 0.375rem; flex-wrap: wrap; }
 .streak-milestone  {
   display: flex; align-items: center; gap: 4px;
@@ -246,9 +246,9 @@
 }
 .streak-milestone .ms-icon { font-size: 0.82rem; }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    ACTIVITY HEATMAP
-══════════════════════════════════════ */
+-------------------------------------- */
 .heatmap-months      { display: flex; gap: 2px; margin-bottom: 0.375rem; overflow: hidden; }
 .heatmap-month-label { font-family: var(--ff-mono); font-size: 0.58rem; color: var(--muted); flex: 1; text-align: center; white-space: nowrap; }
 
@@ -277,9 +277,9 @@
 .heatmap-legend-cells { display: flex; gap: 3px; }
 .heatmap-legend-cell  { width: 10px; height: 10px; border-radius: 2px; }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    ACTIVITY TIMELINE
-══════════════════════════════════════ */
+-------------------------------------- */
 .activity-list { display: flex; flex-direction: column; gap: 0.75rem; }
 .activity-item {
   display: flex; align-items: flex-start; gap: 0.75rem;
@@ -305,9 +305,9 @@
 .activity-title   { font-size: 0.82rem; color: var(--text); font-weight: 500; line-height: 1.4; }
 .activity-meta    { font-family: var(--ff-mono); font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem; }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    SKILLS CHIPS
-══════════════════════════════════════ */
+-------------------------------------- */
 .profile-skills-grid { display: flex; flex-wrap: wrap; gap: 0.375rem; }
 .profile-skill-chip  {
   display: inline-flex; align-items: center; gap: 4px;
@@ -325,18 +325,18 @@
   color: var(--accent-2);
 }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    ANIMATION STAGGER
-══════════════════════════════════════ */
+-------------------------------------- */
 .profile-col:first-child .profile-card:nth-child(1) { animation-delay: 0.06s; }
 .profile-col:first-child .profile-card:nth-child(2) { animation-delay: 0.10s; }
 .profile-col:first-child .profile-card:nth-child(3) { animation-delay: 0.14s; }
 .profile-col:last-child  .profile-card:nth-child(1) { animation-delay: 0.08s; }
 .profile-col:last-child  .profile-card:nth-child(2) { animation-delay: 0.12s; }
 
-/* ══════════════════════════════════════
+/* --------------------------------------
    RESPONSIVE
-══════════════════════════════════════ */
+-------------------------------------- */
 @media (max-width: 860px) {
   .profile-grid     { grid-template-columns: 1fr; }
   .profile-full-page { padding: 1.25rem 1rem; }

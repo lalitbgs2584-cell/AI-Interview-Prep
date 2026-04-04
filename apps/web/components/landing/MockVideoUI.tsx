@@ -1,4 +1,4 @@
-import { WAVE_BARS, LIVE_SCORES } from "../../constants/landing";
+﻿import { WAVE_BARS, LIVE_SCORES } from "../../constants/landing";
 import { WaveBar } from "../WaveBar";
 
 function VidLabel({ text }: { text: string }) {
@@ -37,7 +37,7 @@ export function MockVideoUI() {
             <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#ff6b6b", animation: "dotPulse 2s infinite 0.3s" }} />
             <span style={{ fontFamily: "var(--ff-mono)", fontSize: "0.65rem", color: "rgba(255,255,255,0.3)" }}>REC</span>
           </div>
-          <VidLabel text="You — Candidate" />
+          <VidLabel text="You - Candidate" />
         </div>
 
         {/* AI pane */}
@@ -61,7 +61,7 @@ export function MockVideoUI() {
               {WAVE_BARS.map((w, i) => <WaveBar key={i} delay={w.delay} height={w.h} />)}
             </div>
           </div>
-          <VidLabel text="InterviewGenie — Interviewer" />
+          <VidLabel text="InterviewGenie - Interviewer" />
         </div>
       </div>
 
@@ -94,7 +94,7 @@ export function MockVideoUI() {
         fontFamily: "var(--ff-mono)", fontSize: "0.7rem", color: "var(--accent)",
         animation: "chipBlink 2.5s ease-in-out infinite",
       }}>
-        ⚡ Explain your approach to system design at scale
+         Explain your approach to system design at scale
       </div>
     </div>
   );

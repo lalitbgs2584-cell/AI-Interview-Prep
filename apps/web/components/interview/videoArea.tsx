@@ -58,7 +58,7 @@ export default function VideoArea({
 }: VideoAreaProps) {
   return (
     <div className="video-area">
-      {/* ── AI VIDEO CARD ───────────────────────────────────────────── */}
+      {/* "" AI VIDEO CARD """"""""""""""""""""""""""""""""""""""""""""" */}
       <div className={`vid-card vid-ai${aiSpeaking ? " speaking" : ""}`}>
         <div className="vid-inner">
           <div className="vid-placeholder vid-placeholder-ai">
@@ -85,7 +85,7 @@ export default function VideoArea({
           <div className="vid-speaking-bar">
             <WaveBars active={aiSpeaking} />
             <span className="vid-speaking-label">
-              {aiSpeaking ? "AI is speaking…" : "Listening"}
+              {aiSpeaking ? "AI is speaking" : "Listening"}
             </span>
           </div>
         </div>
@@ -97,7 +97,7 @@ export default function VideoArea({
         </div>
       </div>
 
-      {/* ── USER VIDEO CARD ────────────────────────────────────────── */}
+      {/* "" USER VIDEO CARD """""""""""""""""""""""""""""""""""""""""" */}
       <div
         className={`vid-card vid-user${!camOn ? " cam-off" : ""}`}
         style={{ position: "relative" }}
@@ -185,7 +185,7 @@ export default function VideoArea({
         </div>
       </div>
 
-      {/* ── CONTROL BUTTONS ────────────────────────────────────────── */}
+      {/* "" CONTROL BUTTONS """""""""""""""""""""""""""""""""""""""""" */}
       <div className="controls-bar">
         {/* Mic Toggle */}
         <button className={`ctrl-btn${!micOn ? " ctrl-off" : ""}`} onClick={onMicToggle}>

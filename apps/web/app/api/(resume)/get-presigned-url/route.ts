@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";  // ✅ Use randomUUID (not UUID)
+import { randomUUID } from "node:crypto";  // ... Use randomUUID (not UUID)
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { NextResponse } from "next/server";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -15,7 +15,7 @@ export async function POST(req: Request) {
   try {
     const {  fileType:mime } = await req.json();
     console.log(mime)
-    // ✅ Generate unique filename: UUID + original extension
+    // ... Generate unique filename: UUID + original extension
     const filename = uuid()
     const key = `uploads/${filename}.${mime}`;  // Organized path + unique name
     console.log(key)
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
 
     const url = await getSignedUrl(client, command, { expiresIn: 3600 });
 
-    // ✅ Return both original filename and S3 key for frontend storage
+    // ... Return both original filename and S3 key for frontend storage
     return NextResponse.json({ 
       url, 
       key, 

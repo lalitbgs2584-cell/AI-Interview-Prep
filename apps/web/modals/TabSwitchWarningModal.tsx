@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 /**
  * ============================================================================
  * TabSwitchWarningModal Component
@@ -159,7 +159,7 @@ export function TabSwitchWarningModal({
         >
           {isTerminal
             ? "View Results"
-            : "I Understand — Resume Interview"}
+            : "I Understand - Resume Interview"}
         </button>
       </div>
     </div>
